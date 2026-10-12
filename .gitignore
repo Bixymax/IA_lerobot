@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+# propres à chaque installation (caméras, éclairage)
+fonds/
+outputs/
