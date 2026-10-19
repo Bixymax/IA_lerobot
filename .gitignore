@@ -5,3 +5,7 @@ __pycache__/
 # propres à chaque installation (caméras, éclairage)
 fonds/
 outputs/
+__pycache__/
+*.pyc
+dataset/
+.venv/
