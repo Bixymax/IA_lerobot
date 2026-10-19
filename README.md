@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # PIA – Zone d'alimentation et d'échange (SO-101 + LeRobot)
 
 Pôle IA du projet : un bras SO-101 piloté par un modèle d'imitation (LeRobot) prend dans la
@@ -80,7 +79,9 @@ python -m pytest -q
 - [ ] Boucle d'inférence LeRobot avec masquage
 - [ ] Protocole TCP avec P-Robo (verrou de la zone d'échange, coordonnées)
 - [ ] Nouveaux enregistrements avec plusieurs pièces et réglages caméra figés
-=======
+
+---
+
 # LeRobot Recorder
 
 Outils pour enregistrer facilement un dataset LeRobot (bras SO101 unique,
@@ -96,6 +97,11 @@ Sources :
 ```
 .
 ├── record_dataset.py           # point d'entrée pratique
+├── vision/                     # masquage des pièces non ciblées (voir vision/README.md)
+│   ├── masquage.py
+│   ├── detection.py
+│   └── ARCHITECTURE.md
+├── tests/test_vision.py        # tests de la vision sur images synthétiques
 └── lerobot_recorder/
     ├── __init__.py
     ├── __main__.py              # permet `python -m lerobot_recorder`
@@ -188,6 +194,17 @@ Par défaut (adaptable en ligne de commande ou via variables d'environnement
 
 Toutes les options : `python record_dataset.py --help`
 
+## Vision : montrer une seule pièce au modèle
+
+Le dossier `vision/` efface des images les pièces que le bras ne doit pas prendre, pour que le
+modèle (entraîné avec une seule pièce) ne voie que la cible. Procédure complète :
+[`vision/README.md`](vision/README.md).
+
+```bash
+python vision/masquage.py capture --cams side=4 top=2 angle45=0 --out fonds/   # table vide
+python vision/detection.py --cams side=4 top=2 angle45=0 --forme triangle       # démo
+```
+
 ## Sécurité
 
 Ne mets **jamais** ton token Hugging Face dans ce code ni en argument de
@@ -196,4 +213,3 @@ commande. Connecte-toi une fois pour toutes avec :
 ```bash
 hf auth login --add-to-git-credential
 ```
->>>>>>> b6312d621702b64155d282cad39ac6c3a9c93cf1
