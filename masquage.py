@@ -76,8 +76,9 @@ TEINTES = [("triangle", 0, 10), ("triangle", 165, 179),    # rouge
 
 
 def forme_par_teinte(h):
+    h = float(h) % 180            # la moyenne circulaire peut rendre 180.0 (= 0, rouge)
     for forme, bas, haut in TEINTES:
-        if bas <= h <= haut:
+        if bas <= h < haut + 1:
             return forme
     return "inconnue"
 
@@ -422,35 +423,53 @@ class Masqueur:
         masque = cv2.dilate(masque, np.ones((5, 5), np.uint8), iterations=2)   # bords + flou
         return cv2.bitwise_and(masque, zone)
 
-    def detecter(self, camera, frame, aire_min=80, aire_max=20000):
-        """Détecteur PROVISOIRE sans apprentissage, pour tester l'effacement avant d'avoir YOLO.
-        Une pièce = un ensemble de pixels qui diffère du fond et contient des pixels colorés ;
-        sa forme est devinée d'après sa teinte moyenne (TEINTES). Ne détecte pas les défauts
-        (conforme vaut toujours True). Garder le bras au repos : un bras en mouvement peut être
-        pris pour une pièce. Renvoie des dicts compatibles avec choisir_cible()."""
+    def pieces(self, camera, frame, aire_min=80, aire_max=20000):
+        """Trouve les pièces sans juger leur forme : un ensemble de pixels qui diffère du fond et
+        contient des pixels plus colorés que la table. Pour chaque pièce :
+          boite         : (x1, y1, x2, y2), un peu élargie (sert à l'effacement)
+          masque_colore : tableau bool de la partie colorée, découpé dans la boîte
+          origine       : (x1, y1) du découpage (pour replacer le masque dans l'image)
+          fond          : même découpe dans le fond (table vide, luminosité ajustée)
+          teinte        : teinte moyenne H (0-179, moyenne circulaire)
+          aire          : nombre de pixels de l'ensemble
+        Sert à detecter() ci-dessous et à la mesure de conformité (conformite.py)."""
         fond = self._fond_ajuste(frame, self.fonds[str(camera)])
         masque = self._masque_pieces(frame, fond, np.full(frame.shape[:2], 255, np.uint8))
         n, labels, stats, _ = cv2.connectedComponentsWithStats(masque)
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         vif = pixels_colores(frame, fond) > 0
-        detections = []
+        resultat = []
         for k in range(1, n):
             x, y, w, h, aire = stats[k]
             if not aire_min <= aire <= aire_max:
                 continue
-            colore = (labels == k) & vif          # pixels plus colorés que la table : la pièce
+            decoupe = (slice(y, y + h), slice(x, x + w))
+            colore = (labels[decoupe] == k) & vif[decoupe]   # pixels plus colorés que la table : la pièce
             if colore.sum() < 20:
                 continue
-            ang = hsv[..., 0][colore].astype(np.float32) * (2 * np.pi / 180)   # moyenne circulaire :
+            ang = hsv[decoupe][..., 0][colore].astype(np.float32) * (2 * np.pi / 180)   # moyenne circulaire
             teinte = (np.arctan2(np.sin(ang).mean(), np.cos(ang).mean()) % (2 * np.pi)) * 180 / (2 * np.pi)
+            resultat.append({"boite": (int(x), int(y), int(x + w), int(y + h)),
+                             "masque_colore": colore, "origine": (int(x), int(y)),
+                             "fond": fond[decoupe], "teinte": float(teinte), "aire": int(aire)})
+        return resultat
+
+    def detecter(self, camera, frame, aire_min=80, aire_max=20000):
+        """Détecteur PROVISOIRE par couleur, une caméra à la fois : la forme est devinée d'après
+        la teinte (TEINTES) et toutes les pièces sont dites conformes. Utilisé par detection.py et
+        par flux_masque.py quand il n'y a pas de caméra `top` ; sinon le flux passe par
+        selection.py (forme au contour, taille et couleur jugées sur `top`).
+        Renvoie des dicts compatibles avec choisir_cible()."""
+        detections = []
+        for p in self.pieces(camera, frame, aire_min, aire_max):
             # nombre de sommets de la partie colorée (indicatif ; utile surtout vue de dessus)
-            cs, _ = cv2.findContours(colore.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cs, _ = cv2.findContours(p["masque_colore"].astype(np.uint8), cv2.RETR_EXTERNAL,
+                                     cv2.CHAIN_APPROX_SIMPLE)
             g = max(cs, key=cv2.contourArea)
             sommets = len(cv2.approxPolyDP(g, 0.04 * cv2.arcLength(g, True), True))
-            detections.append({"forme": forme_par_teinte(teinte), "conforme": True,
-                               "boite": (int(x), int(y), int(x + w), int(y + h)),
-                               "conf": 1.0, "teinte": float(teinte), "aire": int(aire),
-                               "sommets": sommets})
+            detections.append({"forme": forme_par_teinte(p["teinte"]), "conforme": True,
+                               "boite": p["boite"], "conf": 1.0, "teinte": p["teinte"],
+                               "aire": p["aire"], "sommets": sommets})
         return detections
 
     def effacer(self, camera, frame, boites_non_cibles, boites_protegees=None, marge=8,

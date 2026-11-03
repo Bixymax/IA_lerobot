@@ -45,27 +45,29 @@ tourne, donc **lancer `flux_masque.py` avant LeRobot**.
 lerobot-find-cameras opencv      # ou : v4l2-ctl --list-devices
 ```
 
-Exemple du 16/10 : `side=2`, `top=4`, `angle45=6`. Les caméras virtuelles apparaissent aussi
+Relever les index (`./setup_local.sh`) et les mettre dans `local.env` (`source local.env` définit `$SIDE`, `$TOP`, `$ANGLE45`, `$PORT_FOLLOWER`, `$PORT_LEADER`, utilisés dans toutes les commandes de ce dossier). Les caméras virtuelles apparaissent aussi
 dans cette liste (10, 11, 12) : ne pas les confondre.
 
 ### 2. Réglages caméra et fond (si l'installation a bougé)
 
 ```bash
-python masquage.py reglages --cams side=2 top=4 angle45=6 --out fonds/
-python masquage.py capture  --cams side=2 top=4 angle45=6 --out fonds/    # table vide
+python masquage.py reglages --cams side=$SIDE top=$TOP angle45=$ANGLE45 --out fonds/
+python masquage.py capture  --cams side=$SIDE top=$TOP angle45=$ANGLE45 --out fonds/    # table vide
 ```
 
 ### 3. Terminal 1 : le flux masqué (le laisser tourner)
 
 ```bash
-python flux_masque.py --cams side=2 top=4 angle45=6 --forme triangle
+python flux_masque.py --cams side=$SIDE top=$TOP angle45=$ANGLE45 --forme triangle
 ```
 
 Commandes à taper dans ce terminal (lettre puis Entrée) :
 
 | Touche | Effet |
 |---|---|
-| `t` `r` `h` `e` | seule cette forme reste visible (triangle, rond, hexagone, étoile) |
+| `t` `r` `h` `e` | une pièce **conforme** de cette forme reste visible (triangle, rond, hexagone, étoile) |
+| `d` | une pièce **défectueuse** reste visible (enregistrements du modèle « poubelle ») |
+| `n` | nouvelle cible, même mode : **à faire à chaque remise en place des pièces** |
 | `a` | aucune : toutes les pièces sont effacées |
 | `b` / `m` | flux brut (sans masquage) / retour au masquage |
 | `q` | quitter |
@@ -82,9 +84,9 @@ ne fournissent pas de MJPG ; LeRobot refuserait de démarrer) :
 
 ```bash
 lerobot-teleoperate \
-  --robot.type=so101_follower --robot.port=/dev/ttyACM0 --robot.id=my_awesome_follower_arm \
+  --robot.type=so101_follower --robot.port=$PORT_FOLLOWER --robot.id=my_awesome_follower_arm \
   --robot.cameras='{ side: {type: opencv, index_or_path: 10, width: 640, height: 480, fps: 30}, top: {type: opencv, index_or_path: 11, width: 640, height: 480, fps: 30}, angle45: {type: opencv, index_or_path: 12, width: 640, height: 480, fps: 30} }' \
-  --teleop.type=so101_leader --teleop.port=/dev/ttyACM1 --teleop.id=my_awesome_leader_arm \
+  --teleop.type=so101_leader --teleop.port=$PORT_LEADER --teleop.id=my_awesome_leader_arm \
   --display_data=true
 ```
 
@@ -95,9 +97,9 @@ Dans Rerun, vérifier : une seule pièce visible, pas de trace des autres, le br
 
 ```bash
 lerobot-record \
-  --robot.type=so101_follower --robot.port=/dev/ttyACM0 --robot.id=my_awesome_follower_arm \
+  --robot.type=so101_follower --robot.port=$PORT_FOLLOWER --robot.id=my_awesome_follower_arm \
   --robot.cameras='{ side: {type: opencv, index_or_path: 10, width: 640, height: 480, fps: 30}, top: {type: opencv, index_or_path: 11, width: 640, height: 480, fps: 30}, angle45: {type: opencv, index_or_path: 12, width: 640, height: 480, fps: 30} }' \
-  --teleop.type=so101_leader --teleop.port=/dev/ttyACM1 --teleop.id=my_awesome_leader_arm \
+  --teleop.type=so101_leader --teleop.port=$PORT_LEADER --teleop.id=my_awesome_leader_arm \
   --dataset.repo_id=Bixymax/so101_masque_triangle \
   --dataset.num_episodes=50 --dataset.episode_time_s=20 --dataset.reset_time_s=10 \
   --dataset.single_task="Prendre la pièce visible et la mettre dans la zone d'échange" \
@@ -130,8 +132,14 @@ L'orchestrateur relié à P-Robo pourra choisir la forme par programme :
   à mélanger avec les nouveaux.
 - **Ne jamais ouvrir les vraies caméras dans LeRobot** pendant que le flux tourne
   (« Device or resource busy »).
-- **Une pièce de chaque couleur** sur la table : chaque caméra reconnaît la cible par sa couleur,
-  indépendamment des autres (voir `docs/architecture.md`, correspondance entre caméras).
+- Avec la caméra `top`, la cible est choisie sur `top` (forme, taille, couleur : voir
+  `docs/conformite.md`) et retrouvée sur les autres caméras par la calibration : plusieurs pièces
+  de même couleur sont possibles. **Sans calibration** (ou avec `--ancien-detecteur`), il faut
+  toujours **une pièce de chaque couleur** sur la table.
+- La cible est **verrouillée** dès qu'elle est choisie : refaire le choix (`n` ou la touche du
+  mode) à chaque remise en place des pièces, sinon les pièces posées ensuite restent visibles.
+- Un dataset par modèle : `--forme triangle` (ou `t r h e` entre les épisodes) pour le modèle
+  « zone d'échange », `--forme defaut` (`d`) pour le modèle « poubelle ».
 - Refaire la capture du fond si une caméra bouge ou si l'éclairage change.
 
 ## Dépannage

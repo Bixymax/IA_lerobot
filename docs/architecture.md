@@ -12,11 +12,13 @@
 
 | Brique | Rôle | État |
 |---|---|---|
-| Vision – détection | Classe et position de chaque pièce (forme × conforme/défaut) | Provisoire : couleur. Cible : YOLO |
+| Vision – détection | Classe et position de chaque pièce (forme × conforme/défaut) | Fait : forme au contour, taille et couleur vs pièces OK apprises (`conformite.py`) |
+| Vision – calibration | Pixels ↔ mm de la table, par caméra | Fait (`calibration.py`) |
+| Vision – sélection | Cible choisie sur `top`, verrouillée, retrouvée sur les autres caméras | Fait (`selection.py`) |
 | Vision – masquage | Efface les pièces non ciblées dans les images du modèle | Fait (`masquage.py`) |
 | Modèle de gestes | Politique LeRobot (ACT) entraînée par imitation | 1er modèle : triangle seul |
 | Orchestrateur | Demandes P-Robo, choix de la cible, verrou, nouvelles tentatives | À faire |
-| Communication | TCP avec P-Robo | Protocole à rédiger et faire valider |
+| Communication | TCP avec P-Robo | Proposition + serveur de référence (`docs/protocole_tcp.md`, `echange_tcp.py`) ; à faire valider par P-Robo |
 
 ## Décision : masquage plutôt que ré-entraînement en scène encombrée
 
@@ -35,7 +37,7 @@ données : une seule pièce visible.
 
 ## Caméras
 
-| Nom LeRobot | Vue | Index lors du 1er enregistrement |
+| Nom LeRobot | Vue | Index lors du 1er enregistrement (changent à chaque séance : `local.env`) |
 |---|---|---|
 | `top` | dessus | 2 |
 | `side` | côté (rase la table) | 4 |
@@ -48,10 +50,12 @@ données : une seule pièce visible.
 
 ## Points ouverts
 
-- **Correspondance entre caméras** : avec deux pièces de même forme, il faut savoir quelle pièce
-  de `side` correspond à celle choisie sur `top`. Piste : homographie table ↔ chaque caméra via
-  marqueurs ArUco (sert aussi aux coordonnées envoyées à P-Robo).
+- ~~Correspondance entre caméras~~ : résolue par homographie table ↔ caméra (coins de la nappe
+  cliqués), voir `docs/conformite.md`. Mêmes coordonnées en mm pour P-Robo.
 - **Câbles rouges du bras** : peuvent être pris pour une pièce quand le bras passe dans une boîte.
-- **Défauts** : détection par mesures (couleur, aire en mm², contour) ou classes YOLO `*_defaut`.
+- **Défauts** : choix des mesures (taille en mm, couleur Lab, forme au contour) plutôt que YOLO :
+  un défaut de taille subtil ne se voit pas sur l'apparence, il se mesure ; et les références
+  s'apprennent avec quelques pièces OK, sans étiqueter de dataset. Reste à mesurer la dispersion
+  réelle avec les pièces défectueuses (`conformite.py verifier`).
 - **LeRobot remet-il les contrôles caméra à zéro ?** À vérifier avec `v4l2-ctl --get-ctrl`
   pendant un enregistrement.

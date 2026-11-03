@@ -1,0 +1,22 @@
+{
+  "_aide": "Repères tracés sur la table, en mm. Origine = coin haut-gauche du rectangle vert vu par la caméra top, x vers la droite, y vers le robot. VÉRIFIEZ à la règle (A5 supposé) et ajoutez d'autres coins si besoin (4 points visibles minimum par caméra). zone_alimentation (facultatif) : polygone en mm ; seules les pièces dedans peuvent être choisies comme cible.",
+  "points": {
+    "vert_haut_gauche": [
+      0.0,
+      0.0
+    ],
+    "vert_haut_droite": [
+      210.0,
+      0.0
+    ],
+    "vert_bas_droite": [
+      210.0,
+      148.0
+    ],
+    "vert_bas_gauche": [
+      0.0,
+      148.0
+    ]
+  },
+  "zone_alimentation": null
+}

@@ -17,7 +17,9 @@ Lancement (index des vraies caméras à vérifier à chaque installation) :
 
 Commandes pendant le flux (taper la lettre puis Entrée dans ce terminal, ou dans la fenêtre
 d'aperçu avec --apercu) :
-    t = triangle, r = rond, h = hexagone, e = étoile   -> seule cette forme reste visible
+    t = triangle, r = rond, h = hexagone, e = étoile   -> une pièce CONFORME de cette forme
+    d = une pièce DÉFECTUEUSE (pour le modèle « poubelle »)
+    n = nouvelle cible, même mode (à faire après avoir replacé les pièces)
     a = aucune (toutes les pièces effacées)
     b = brut (flux sans masquage, pour comparer)       m = revenir au masquage
     q = quitter
@@ -30,10 +32,14 @@ import time
 import cv2
 import numpy as np
 
+from calibration import Calibration
+from conformite import FORMES as NOMS_FORMES
+from conformite import References
 from masquage import (FPS, HAUTEUR, LARGEUR, Masqueur, appliquer_reglages_dossier,
                       choisir_cible, ouvrir_camera, parse_cams, stderr_silencieux)
+from selection import Selection
 
-FORMES = {"t": "triangle", "r": "rond", "h": "hexagone", "e": "etoile"}
+FORMES = {"t": "triangle", "r": "rond", "h": "hexagone", "e": "etoile", "d": "defaut"}
 
 
 # --------------------------------------------------------------------------- #
@@ -139,7 +145,11 @@ class FluxMasque:
     """
 
     def __init__(self, masqueur, cams, sorties, forme="triangle", detection_hz=5.0,
-                 ouvrir=ouvrir_camera, creer_sortie=SortieVirtuelle, horloge=time.monotonic):
+                 ouvrir=ouvrir_camera, creer_sortie=SortieVirtuelle, horloge=time.monotonic,
+                 selection=None):
+        """selection : objet selection.Selection (cible choisie sur `top`, forme/taille/couleur
+        jugées, correspondance entre caméras). Sans lui, ancien détecteur par couleur, caméra
+        par caméra (une pièce de chaque couleur sur la table)."""
         manquants = [nom for nom, _ in cams if nom not in masqueur.fonds]
         if manquants:
             raise SystemExit(f"Pas de fond pour : {', '.join(manquants)} "
@@ -148,6 +158,9 @@ class FluxMasque:
         if sans_sortie:
             raise SystemExit(f"Pas de caméra virtuelle pour : {', '.join(sans_sortie)} (--sorties)")
         self.masqueur = masqueur
+        self.selection = selection
+        if selection is not None:
+            selection.definir(forme)
         self.cams = cams
         self.sorties = sorties
         self.periode_detection = 1.0 / detection_hz if detection_hz > 0 else 0.0
@@ -167,11 +180,22 @@ class FluxMasque:
 
     # ---- commandes (thread-safe) -------------------------------------------
     def choisir_forme(self, forme):
+        """forme : "triangle", "rond", "hexagone", "etoile", "defaut" (avec selection) ou None."""
         with self.verrou:
             self._forme = forme
             for e in self.etat.values():
                 e["t_det"] = -1e9          # nouvelle forme : on redétecte tout de suite
-        print(f"[flux] forme visible : {forme or 'aucune'}")
+        if self.selection is not None:
+            self.selection.definir(forme)
+        print(f"[flux] pièce visible : {forme or 'aucune'}")
+
+    def nouvelle_cible(self):
+        if self.selection is not None:
+            self.selection.nouvelle_cible()
+            with self.verrou:
+                for e in self.etat.values():
+                    e["t_det"] = -1e9
+            print(f"[flux] nouvelle cible ({self.forme or 'aucune'})")
 
     def mode_brut(self, actif):
         with self.verrou:
@@ -196,6 +220,8 @@ class FluxMasque:
             e["cible"] = None
             return frame
         maintenant = self.horloge()
+        if self.selection is not None:
+            return self._traiter_selection(nom, frame, e, maintenant)
         if maintenant - e["t_det"] >= self.periode_detection:
             e["detections"] = e["suivi"].maj(self.masqueur.detecter(nom, frame))
             e["t_det"] = maintenant
@@ -219,6 +245,15 @@ class FluxMasque:
         e["cible"] = cible
         protegees = [cible["boite"]] if cible else None
         return self.masqueur.effacer(nom, frame, non_cibles, boites_protegees=protegees)
+
+    def _traiter_selection(self, nom, frame, e, maintenant):
+        if maintenant - e["t_det"] >= self.periode_detection or "consigne" not in e:
+            e["consigne"] = self.selection.consigne(nom, frame)
+            e["t_det"] = maintenant
+        c = e["consigne"]
+        e["cible"] = c["cible"]
+        protegees = [c["cible"]] if c["cible"] else None
+        return self.masqueur.effacer(nom, frame, c["effacer"], boites_protegees=protegees)
 
     # ---- boucle par caméra --------------------------------------------------
     def _boucle(self, nom, cap, sortie):
@@ -294,8 +329,10 @@ def appliquer_commande(flux, cmd):
     cmd = cmd.strip().lower()[:1]
     if cmd == "q":
         return False
-    if cmd in FORMES:
+    if cmd in FORMES and (cmd != "d" or flux.selection is not None):
         flux.choisir_forme(FORMES[cmd])
+    elif cmd == "n":
+        flux.nouvelle_cible()
     elif cmd == "a":
         flux.choisir_forme(None)
     elif cmd == "b":
@@ -303,7 +340,8 @@ def appliquer_commande(flux, cmd):
     elif cmd == "m":
         flux.mode_brut(False)
     elif cmd:
-        print("[flux] commandes : t r h e (forme), a (aucune), b (brut), m (masque), q (quitter)")
+        print("[flux] commandes : t r h e (forme OK), d (défectueuse), n (nouvelle cible), "
+              "a (aucune), b (brut), m (masque), q (quitter)")
     return True
 
 
@@ -320,7 +358,15 @@ def _apercu(flux, echelle, diagnostic=False):
         e = flux.etat[nom]
         img = e["image"] if e["image"] is not None else np.zeros((HAUTEUR, LARGEUR, 3), np.uint8)
         img = img.copy()
-        if diagnostic and not flux.brut:
+        if diagnostic and not flux.brut and "consigne" in e:
+            # vert = cible (montrée), orange = effacée, gris = laissée visible (apparue après le choix)
+            roles = {"cible": (0, 200, 0), "effacee": (0, 140, 255), "visible": (160, 160, 160)}
+            for a in e["consigne"]["annotations"]:
+                x1, y1, x2, y2 = a["boite"]
+                cv2.rectangle(img, (x1, y1), (x2, y2), roles[a["role"]], 1)
+                cv2.putText(img, a["texte"], (x1, max(y1 - 4, 12)), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.4, roles[a["role"]], 1)
+        elif diagnostic and not flux.brut:
             # boîtes de ce que le détecteur a vu : vert = cible (montrée), orange = effacée
             for d in e["detections"]:
                 x1, y1, x2, y2 = d["boite"]
@@ -353,7 +399,27 @@ def main(args):
     appliquer_reglages_dossier(args.fonds, dict(cams))
     masqueur = Masqueur.charger(args.fonds)
     forme = None if args.forme == "aucune" else args.forme
-    flux = FluxMasque(masqueur, cams, sorties, forme=forme, detection_hz=args.detection_hz)
+    selection = None
+    if args.camera_ref in dict(cams) and not args.ancien_detecteur:
+        calib = Calibration.charger(args.fonds)
+        refs = References.charger(args.fonds)
+        selection = Selection(masqueur, calib, refs, camera_ref=args.camera_ref)
+        print(f"[flux] cible choisie sur '{args.camera_ref}' (forme au contour, taille, couleur)")
+        if not calib.a(args.camera_ref):
+            print(f"[ATTENTION] '{args.camera_ref}' non calibrée : tailles en pixels, et les autres "
+                  f"caméras retrouvent la cible par sa couleur seulement (python calibration.py cliquer)")
+        for nom, _ in cams:
+            if nom != args.camera_ref and calib.a(args.camera_ref) and not calib.a(nom):
+                print(f"[ATTENTION] '{nom}' non calibrée : la cible y est retrouvée par sa couleur, "
+                      f"ambigu si deux pièces ont la même couleur")
+        manquantes = [f for f in NOMS_FORMES if refs.modele(f) is None]
+        if manquantes:
+            print(f"[ATTENTION] formes non apprises, taille non vérifiée : {', '.join(manquantes)} "
+                  f"(python conformite.py apprendre ...)")
+    elif forme == "defaut":
+        raise SystemExit("--forme defaut demande la caméra du dessus (--camera-ref)")
+    flux = FluxMasque(masqueur, cams, sorties, forme=forme, detection_hz=args.detection_hz,
+                      selection=selection)
     flux.diagnostic = args.diagnostic
     if args.sans_masquage:
         flux.mode_brut(True)
@@ -361,7 +427,7 @@ def main(args):
     print("[flux] caméras virtuelles : "
           + ", ".join(f"{nom} -> /dev/video{sorties[nom]}" for nom, _ in cams))
     print("[flux] dans LeRobot : index_or_path = l'index virtuel, SANS fourcc. "
-          "Commandes : t r h e a b m q (+ Entrée).")
+          "Commandes : t r h e d n a b m q (+ Entrée).")
     stop = threading.Event()
     threading.Thread(target=_lire_terminal, args=(flux, stop), daemon=True).start()
     dernier_bilan = time.monotonic()
@@ -372,6 +438,9 @@ def main(args):
                     break
             else:
                 time.sleep(0.1)
+            if selection is not None:
+                for msg in selection.lire_evenements():
+                    print(f"[flux] {msg}")
             if time.monotonic() - dernier_bilan > 10:
                 dernier_bilan = time.monotonic()
                 print("[flux] " + " | ".join(
@@ -397,7 +466,12 @@ if __name__ == "__main__":
                     help="caméras VIRTUELLES, nom=index (défaut : side=10 top=11 angle45=12)")
     ap.add_argument("--fonds", default="fonds/")
     ap.add_argument("--forme", default="triangle",
-                    choices=list(FORMES.values()) + ["aucune"])
+                    choices=list(FORMES.values()) + ["aucune"],
+                    help="pièce visible au départ ; defaut = une pièce défectueuse")
+    ap.add_argument("--camera-ref", default="top",
+                    help="caméra qui choisit la cible et juge la conformité (défaut : top)")
+    ap.add_argument("--ancien-detecteur", action="store_true",
+                    help="ancien comportement : forme devinée par la couleur, caméra par caméra")
     ap.add_argument("--detection-hz", type=float, default=5.0,
                     help="détections par seconde (l'effacement, lui, est fait sur chaque image)")
     ap.add_argument("--sans-masquage", action="store_true",
