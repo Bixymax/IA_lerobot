@@ -28,7 +28,7 @@ remplaçant par une photo de la table vide (le *fond*). Détails : `docs/archite
 | `scripts/record_triangle.sh` | Commande `lerobot-record` du premier jeu de données |
 | `manuel.md` | Aide-mémoire des commandes LeRobot (calibration, téléopération, enregistrement, test d'un modèle) |
 | `tests/` | Tests sur images synthétiques et sockets locales (pas besoin de matériel) |
-| `docs/` | `architecture.md`, `conformite.md`, `flux_masque.md`, `protocole_tcp.md` |
+| `docs/` | `architecture.md`, `conformite.md`, `flux_masque.md`, `protocole_tcp.md`, `checklist_enregistrement.md` |
 
 ## Installation (une seule fois par PC)
 
