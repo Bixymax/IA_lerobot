@@ -393,29 +393,66 @@ class Masqueur:
         return cls(fonds)
 
     @staticmethod
-    def _fond_ajuste(frame, fond):
-        """Compense une petite dérive de luminosité (gain par canal). La médiane sur toute
-        l'image ignore les pièces, qui n'en couvrent qu'une petite partie."""
-        valide = (frame.max(axis=2) > 60) & (fond.max(axis=2) > 60)
-        if valide.sum() < 1000:
+    def _gain_lumiere(frame, fond, echelle=8):
+        """Gain par canal fond -> image, VARIABLE dans l'image : champ lisse (h, w, 3), ou None.
+
+        Un gain unique ne suffit pas quand la lumière change d'un côté de la table (soleil, store,
+        ombre d'une personne) : tout un côté « diffère du fond », forme une zone immense qui avale
+        les pièces (et laisse des fantômes pâles là où elles sont effacées). On estime donc le
+        rapport image/fond sur une version réduite, en ne gardant que la table seule (ni pièce, ni
+        bras : ils s'écartent trop du fond), lissé sur ~3 cases (~25 px), puis on le ré-agrandit."""
+        h, w = frame.shape[:2]
+        sh, sw = max(h // echelle, 8), max(w // echelle, 8)
+        f = cv2.resize(frame, (sw, sh), interpolation=cv2.INTER_AREA).astype(np.float32)
+        g = cv2.resize(fond, (sw, sh), interpolation=cv2.INTER_AREA).astype(np.float32)
+        valide = (f.max(axis=2) > 60) & (g.max(axis=2) > 60)
+        if valide.sum() < 20:
+            return None
+        gain = np.array([np.median(f[..., c][valide]) / max(np.median(g[..., c][valide]), 1)
+                         for c in range(3)], np.float32)
+        champ = np.broadcast_to(np.clip(gain, 0.6, 1.6), (sh, sw, 3)).copy()
+        rapport = (f + 1.0) / (g + 1.0)
+        for _ in range(3):
+            table = valide & (np.abs(f - g * champ).max(axis=2) < 45)     # ni pièce ni bras
+            poids = table.astype(np.float32)
+            if poids.sum() < 20:
+                break
+            num = cv2.GaussianBlur(rapport * poids[..., None], (0, 0), 3)
+            den = cv2.GaussianBlur(poids, (0, 0), 3)[..., None]
+            champ = np.where(den > 0.05, num / np.maximum(den, 1e-3), champ)
+            champ = np.clip(champ, 0.6, 1.6).astype(np.float32)
+        return cv2.resize(champ, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    @staticmethod
+    def _appliquer_gain(fond, gain, roi=None):
+        """Fond multiplié par le champ de gain. roi = (y0, y1, x0, x1) : ne corrige que ce
+        rectangle (le gain a la taille de l'image entière)."""
+        if roi is not None:
+            y0, y1, x0, x1 = roi
+            fond = fond[y0:y1, x0:x1]
+            gain = None if gain is None else gain[y0:y1, x0:x1]
+        if gain is None:
             return fond
-        gain = np.array([np.median(frame[..., c][valide]) / max(np.median(fond[..., c][valide]), 1)
-                         for c in range(3)])
-        gain = np.clip(gain, 0.8, 1.25)   # on ne corrige que de petites dérives
         return np.clip(fond.astype(np.float32) * gain, 0, 255).astype(np.uint8)
 
     @staticmethod
-    def _masque_pieces(frame, fond, zone):
+    def _fond_ajuste(frame, fond):
+        """Fond recalé sur la lumière actuelle (voir _gain_lumiere)."""
+        return Masqueur._appliquer_gain(fond, Masqueur._gain_lumiere(frame, fond))
+
+    @staticmethod
+    def _masque_pieces(frame, fond, zone, colores=None):
         """Pixels qui diffèrent du fond (pièce, face sombre, ombre) dans `zone`, en ne gardant
         que les ensembles connexes qui contiennent au moins un pixel coloré (la pièce).
         Le bras (noir/blanc) n'est donc pas effacé, et rien ne change là où l'image
-        est identique au fond."""
+        est identique au fond. `colores` : résultat de pixels_colores(frame, fond) s'il est déjà
+        calculé (évite de le refaire)."""
         f = cv2.GaussianBlur(frame, (5, 5), 0).astype(np.int16)
         g = cv2.GaussianBlur(fond, (5, 5), 0).astype(np.int16)
         diff = ((np.abs(f - g).max(axis=2) > SEUIL_DIFF).astype(np.uint8)) * 255
         diff = cv2.bitwise_and(diff, zone)
         diff = cv2.morphologyEx(diff, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
-        graine = cv2.bitwise_and(diff, pixels_colores(frame, fond))
+        graine = cv2.bitwise_and(diff, pixels_colores(frame, fond) if colores is None else colores)
         _, labels = cv2.connectedComponents(diff)
         garde = np.unique(labels[graine > 0])
         garde = garde[garde != 0]
@@ -434,10 +471,11 @@ class Masqueur:
           aire          : nombre de pixels de l'ensemble
         Sert à detecter() ci-dessous et à la mesure de conformité (conformite.py)."""
         fond = self._fond_ajuste(frame, self.fonds[str(camera)])
-        masque = self._masque_pieces(frame, fond, np.full(frame.shape[:2], 255, np.uint8))
+        colores = pixels_colores(frame, fond)          # une seule fois (coûteux : conversion Lab)
+        masque = self._masque_pieces(frame, fond, np.full(frame.shape[:2], 255, np.uint8), colores)
         n, labels, stats, _ = cv2.connectedComponentsWithStats(masque)
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        vif = pixels_colores(frame, fond) > 0
+        vif = colores > 0
         resultat = []
         for k in range(1, n):
             x, y, w, h, aire = stats[k]
@@ -497,11 +535,20 @@ class Masqueur:
         for x1, y1, x2, y2 in (boites_protegees or []):
             m = marge_protection
             zone[max(int(y1) - m, 0):min(int(y2) + m, h), max(int(x1) - m, 0):min(int(x2) + m, w)] = 0
-        if corriger_lumiere:
-            fond = self._fond_ajuste(frame, fond)
-        masque = self._masque_pieces(frame, fond, zone)
+        # Tout se joue dans le rectangle qui englobe les zones à effacer (+ marge > rayon des
+        # flous et des dilatations) : le résultat est identique, mais 3 à 5 fois moins coûteux.
+        gain = self._gain_lumiere(frame, fond) if corriger_lumiere else None
+        x, y, bw, bh = cv2.boundingRect(zone)
+        if bw == 0 or bh == 0:
+            return frame            # tout est protégé : rien à effacer
+        pad = 10
+        y0, y1 = max(y - pad, 0), min(y + bh + pad, h)
+        x0, x1 = max(x - pad, 0), min(x + bw + pad, w)
+        fond_roi = self._appliquer_gain(fond, gain, (y0, y1, x0, x1))
+        masque = self._masque_pieces(frame[y0:y1, x0:x1], fond_roi, zone[y0:y1, x0:x1])
         sortie = frame.copy()
-        sortie[masque > 0] = fond[masque > 0]
+        roi = sortie[y0:y1, x0:x1]
+        roi[masque > 0] = fond_roi[masque > 0]
         return sortie
 
 

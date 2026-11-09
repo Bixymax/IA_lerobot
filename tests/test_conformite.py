@@ -156,6 +156,16 @@ def test_references_sauvegarde(tmp_path, refs):
 
 # --------------------------------------------------------------------------- #
 # Sélection multi-caméras
+def test_zones_pieces():
+    carre = [(0, 0), (100, 0), (100, 100), (0, 100)]
+    cal = Calibration({}, zones_pieces=[carre, [(300, 0), (400, 0), (400, 100), (300, 100)]])
+    assert cal.dans_zones_pieces((50, 50)) and cal.dans_zones_pieces((350, 50))
+    assert cal.dans_zones_pieces((120, 50))                   # dans la marge de 30 mm
+    assert not cal.dans_zones_pieces((200, 50))               # entre les zones
+    assert not cal.dans_zones_pieces((50, 400))
+    assert Calibration().dans_zones_pieces((1e6, 1e6))        # pas de zones : aucun filtre
+
+
 # --------------------------------------------------------------------------- #
 # Caméra « side » synthétique : l'image de top retournée gauche-droite, avec sa calibration.
 def _side(img):
@@ -204,6 +214,103 @@ def test_selection_forme_ok_et_correspondance_side(refs):
     c = sel.consigne("side", _side(img))
     assert c["cible"] is not None and _centre(c["cible"])[0] == pytest.approx(W - 1 - 150, abs=5)
     assert len(c["effacer"]) == 2
+
+
+def test_analyser_ignore_hors_zones():
+    cal, img = _calib(), _scene(SCENE)
+    assert len(_mesures(img, cal)) == 3                       # sans zones : tout est une pièce
+    cal.zones_pieces = [np.array([(0, 0), (300 * ECHELLE, 0), (300 * ECHELLE, 250 * ECHELLE),
+                                  (0, 250 * ECHELLE)], np.float32)]
+    assert len(_mesures(img, cal)) == 1                       # apprendre / verifier : idem
+
+
+def test_selection_ignore_les_objets_hors_des_zones(refs):
+    # le triangle OK est à (150, 150) px, le petit triangle à (420, 300), l'étoile à (500, 330)
+    cal = _calib2()
+    cal.zones_pieces = [np.array([(0, 0), (300 * ECHELLE, 0), (300 * ECHELLE, 250 * ECHELLE),
+                                  (0, 250 * ECHELLE)], np.float32)]
+    sel = _selection(refs, "triangle", cal)
+    img = _scene(SCENE)
+    for _ in range(4):
+        c = sel.consigne("top", img)
+    inv = sel.inventaire()
+    assert len(inv) == 1 and inv[0]["cible"]                 # seul le triangle de la zone est suivi
+    boites_effacees = [a["boite"] for a in c["annotations"] if a["role"] == "effacee"]
+    assert boites_effacees == []                            # les objets hors zone ne sont pas effacés
+
+
+def test_piece_partie_oubliee_vite_mais_pas_sous_le_bras(refs):
+    # deux triangles : le OK en (150, 150) px et le petit en (420, 300)
+    scene2 = [SCENE[0], SCENE[1]]
+    sel = _selection(refs, "triangle")
+    img = _scene(scene2)
+    for _ in range(4):
+        sel.consigne("top", img)
+    assert len(sel.inventaire()) == 2
+    # le bras (gris sombre, non coloré) passe sur le petit triangle : on le garde en mémoire
+    sous_bras = img.copy()
+    sous_bras[300 - 50:300 + 50, 420 - 50:420 + 50] = 40
+    for _ in range(8):
+        sel.consigne("top", sous_bras)
+    assert len(sel.pistes) == 2                       # toujours en mémoire (pas vue, mais recouverte)
+    # le petit triangle est vraiment parti : table vide à cet endroit -> oublié en quelques détections
+    parti = _scene([SCENE[0]])
+    for _ in range(sel.oubli_libre + 1):
+        sel.consigne("top", parti)
+    assert len(sel.pistes) == 1 and sel.inventaire()[0]["cible"]
+
+
+def test_teinte_par_canal_refuse_un_rond_jaune():
+    # rond orange très variable en clarté (reflets) : l'écart global le tolérait ; la teinte, non
+    rng = np.random.default_rng(3)
+
+    def lot(lab, sig, n=40):
+        return [{"x": float(rng.uniform(-150, -40)), "y": float(rng.uniform(60, 230)),
+                 "diametre": 32.5 + float(rng.normal(0, 0.3)), "unite": "mm",
+                 "lab": [lab[i] + float(rng.normal(0, sig[i])) for i in range(3)],
+                 "solidite": 0.974, "remplissage": 0.856} for _ in range(n)]
+    refs = C.References()
+    refs.ajouter("rond", lot((43, 16, 41), (7, 4, 7)))
+    refs.ajouter("hexagone", lot((57, -5, 36), (3, 0.5, 4)))
+
+    def juger(lab, couleur):
+        return C.juger({"solidite": 0.974, "remplissage": 0.856, "lab": lab, "couleur": couleur,
+                        "x": -100.0, "y": 140.0, "diametre": 32.5, "unite": "mm"}, refs)
+    orange = juger([44, 17, 40], "orange")
+    jaune = juger([57, -5, 36], "jaune")
+    assert orange["forme"] == "rond" and orange["conforme"]
+    assert jaune["forme"] == "rond" and not jaune["conforme"]
+    assert any("teinte" in r for r in jaune["raisons"])
+
+
+def test_gain_local_dégradé_de_lumière():
+    # la lumière baisse de 38 % sur le côté gauche (soleil, store) : sans correction locale, tout ce
+    # côté « diffère du fond » (écart > seuil), forme une zone immense et les pièces sont perdues
+    img = _scene(SCENE).astype(np.float32)
+    rampe = np.linspace(0.62, 1.0, W, dtype=np.float32)[None, :, None]
+    sombre = np.clip(img * rampe, 0, 255).astype(np.uint8)
+    assert len(_mesures(sombre)) == 3
+    # et une pièce n'est pas confondue avec le gradient : sa position reste juste
+    xs = sorted(m["x"] for m in _mesures(sombre))
+    attendu = sorted(c * ECHELLE for c in (150, 420, 500))
+    assert xs == pytest.approx(attendu, abs=3)
+
+
+def test_taille_non_jugee_hors_de_la_zone_apprise():
+    rng = np.random.default_rng(5)
+    refs = C.References()
+    refs.ajouter("triangle", [{"x": float(rng.uniform(-150, -40)), "y": float(rng.uniform(60, 230)),
+                               "diametre": 27.0 + float(rng.normal(0, 0.2)), "unite": "mm",
+                               "lab": [20, 30, 19], "solidite": 0.948, "remplissage": 0.489}
+                              for _ in range(30)])
+
+    def juger(x, y, d):
+        return C.juger({"solidite": 0.948, "remplissage": 0.489, "lab": [20, 30, 19], "couleur": "rouge",
+                        "x": x, "y": y, "diametre": d, "unite": "mm"}, refs)
+    assert juger(-100, 140, 27.0)["conforme"]                      # dans la zone apprise
+    assert not juger(-100, 140, 22.0)["conforme"]                  # trop petit : défaut
+    hors = juger(300, 100, 22.0)                                    # zone bleue : taille non jugée
+    assert hors["conforme"] and any("zone apprise" in r for r in hors["remarques"])
 
 
 def test_selection_defaut(refs):

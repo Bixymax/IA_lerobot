@@ -146,8 +146,11 @@ class FluxMasque:
 
     def __init__(self, masqueur, cams, sorties, forme="triangle", detection_hz=5.0,
                  ouvrir=ouvrir_camera, creer_sortie=SortieVirtuelle, horloge=time.monotonic,
-                 selection=None):
-        """selection : objet selection.Selection (cible choisie sur `top`, forme/taille/couleur
+                 selection=None, asynchrone=False):
+        """asynchrone : True = la détection (30 à 40 ms) tourne dans un fil à part ; les images
+        continuent d'être effacées avec la dernière consigne (le flux garde ses 30 img/s).
+        False (défaut, tests) = détection dans la boucle de l'image, ordre déterministe.
+        selection : objet selection.Selection (cible choisie sur `top`, forme/taille/couleur
         jugées, correspondance entre caméras). Sans lui, ancien détecteur par couleur, caméra
         par caméra (une pièce de chaque couleur sur la table)."""
         manquants = [nom for nom, _ in cams if nom not in masqueur.fonds]
@@ -164,6 +167,8 @@ class FluxMasque:
         self.cams = cams
         self.sorties = sorties
         self.periode_detection = 1.0 / detection_hz if detection_hz > 0 else 0.0
+        self.asynchrone = asynchrone
+        self._generation = 0       # +1 à chaque changement de forme/cible : jette les détections périmées
         self.ouvrir = ouvrir
         self.creer_sortie = creer_sortie
         self.horloge = horloge
@@ -183,6 +188,7 @@ class FluxMasque:
         """forme : "triangle", "rond", "hexagone", "etoile", "defaut" (avec selection) ou None."""
         with self.verrou:
             self._forme = forme
+            self._generation += 1
             for e in self.etat.values():
                 e["t_det"] = -1e9          # nouvelle forme : on redétecte tout de suite
         if self.selection is not None:
@@ -193,6 +199,7 @@ class FluxMasque:
         if self.selection is not None:
             self.selection.nouvelle_cible()
             with self.verrou:
+                self._generation += 1
                 for e in self.etat.values():
                     e["t_det"] = -1e9
             print(f"[flux] nouvelle cible ({self.forme or 'aucune'})")
@@ -247,13 +254,38 @@ class FluxMasque:
         return self.masqueur.effacer(nom, frame, non_cibles, boites_protegees=protegees)
 
     def _traiter_selection(self, nom, frame, e, maintenant):
-        if maintenant - e["t_det"] >= self.periode_detection or "consigne" not in e:
+        echu = maintenant - e["t_det"] >= self.periode_detection
+        # Détection dans la boucle (donc l'image attend) : la toute première, après un changement
+        # de forme ou de cible (e["t_det"] remis à -1e9 : on ne doit pas montrer l'ancien choix),
+        # et toujours en mode non asynchrone.
+        if "consigne" not in e or e["t_det"] < -1e8 or (echu and not self.asynchrone):
+            with self.verrou:
+                gen = self._generation
             e["consigne"] = self.selection.consigne(nom, frame)
             e["t_det"] = maintenant
+            e["gen"] = gen
+        elif echu and not e.get("en_cours"):
+            e["en_cours"] = True
+            e["t_det"] = maintenant
+            with self.verrou:
+                gen = self._generation
+            threading.Thread(target=self._detecter_en_fond, args=(nom, frame.copy(), e, gen),
+                             name=f"detection-{nom}", daemon=True).start()
         c = e["consigne"]
         e["cible"] = c["cible"]
         protegees = [c["cible"]] if c["cible"] else None
         return self.masqueur.effacer(nom, frame, c["effacer"], boites_protegees=protegees)
+
+    def _detecter_en_fond(self, nom, frame, e, gen):
+        try:
+            consigne = self.selection.consigne(nom, frame)
+            with self.verrou:
+                if gen == self._generation:     # sinon forme/cible changée entre-temps : périmée
+                    e["consigne"] = consigne
+        except Exception as ex:  # noqa: BLE001 - un échec ne doit pas arrêter le flux
+            print(f"[flux] {nom} : détection en échec ({ex!r}), on garde la précédente")
+        finally:
+            e["en_cours"] = False
 
     # ---- boucle par caméra --------------------------------------------------
     def _boucle(self, nom, cap, sortie):
@@ -296,7 +328,9 @@ class FluxMasque:
                 cap = self.ouvrir(index)
                 caps.append(cap)
                 try:
-                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)     # image la plus récente : moins de latence
+                    # 2 tampons : avec 1 seul, V4L2 divise le débit par deux (15 img/s au lieu de 30,
+                    # mesuré avec les C310) ; 2 garde 30 img/s avec très peu de latence.
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
                 except Exception:  # noqa: BLE001 - réglage facultatif
                     pass
                 ouverts.append((nom, cap, self.creer_sortie(self.sorties[nom])))
@@ -419,7 +453,7 @@ def main(args):
     elif forme == "defaut":
         raise SystemExit("--forme defaut demande la caméra du dessus (--camera-ref)")
     flux = FluxMasque(masqueur, cams, sorties, forme=forme, detection_hz=args.detection_hz,
-                      selection=selection)
+                      selection=selection, asynchrone=True)
     flux.diagnostic = args.diagnostic
     if args.sans_masquage:
         flux.mode_brut(True)

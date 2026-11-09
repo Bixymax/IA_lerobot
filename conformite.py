@@ -58,9 +58,20 @@ SIGMA_FORME_MIN = 0.03
 TOLERANCES = {
     "taille_min_pct": 2.5,   # tolérance de taille minimale (± %), même si la mesure est très stable
     "taille_k": 3.0,         # sinon : k x dispersion des pièces OK autour de la référence
+                             # (2 détecte mieux les petites déformations mais ne laisse plus de marge
+                             # à une dérive de lumière : à n'essayer qu'avec un éclairage stable)
+    # forme -> k propre à cette forme : l'étoile, dont le « diamètre » dépend de l'orientation des
+    # branches, est plus dispersée (±10 % à k=3) : un k plus bas y donnerait des faux défauts
+    "taille_k_par_forme": {"etoile": 3.0},
     "couleur_min": 10.0,     # écart de couleur minimal toléré (unités Lab, ~ ΔE)
     "couleur_k": 3.0,        # sinon : k x dispersion de couleur des pièces OK
     "forme_max": 6.0,        # au-delà (en écarts-types), la forme est « inconnue » -> défaut
+    # Teinte (canaux a et b de Lab, sans la clarté), jugée canal par canal : la clarté et les
+    # reflets d'une pièce brillante (le rond) gonflent l'écart global et laissaient passer une
+    # pièce d'une autre couleur (rond jaune pris pour un rond orange).
+    "teinte_k": 3.0,         # défaut si |écart a| ou |écart b| > k x dispersion de ce canal
+    "teinte_sigma_min": 3.0, # dispersion plancher (unités Lab) : une forme très régulière n'est pas
+                             # pour autant rejetée au moindre changement de lumière
 }
 REFERENCES_FICHIER = "references.json"
 ECHANTILLONS_MIN = 3          # en dessous, la forme est considérée comme non apprise
@@ -264,13 +275,23 @@ class References:
         residus = d - X @ coef
         sigma_d = float(np.sqrt((residus ** 2).sum() / max(len(d) - X.shape[1], 1)))
         lab_ref = lab.mean(axis=0)
+        sigma_ab = lab[:, 1:3].std(axis=0)
         sigma_c = float(np.sqrt(np.mean([distance_couleur(l, lab_ref) ** 2 for l in lab])))
         mod = {"n": len(ech), "degre": degre, "coef": coef, "centre_xy": centre_xy,
                "sigma_taille": max(sigma_d, 0.05), "borne_taille": (d.min(), d.max()),
-               "lab": lab_ref, "sigma_couleur": sigma_c,
+               "lab": lab_ref, "sigma_couleur": sigma_c, "sigma_ab": sigma_ab,
+               "zone_apprise": (float(x.min()), float(x.max()), float(y.min()), float(y.max())),
                "forme_mu": f.mean(axis=0), "forme_sigma": np.maximum(f.std(axis=0), SIGMA_FORME_MIN)}
         self._cache[forme] = mod
         return mod
+
+    def dans_zone_apprise(self, forme, x, y, marge=40.0):
+        """True si (x, y) est dans le rectangle des échantillons de cette forme, à `marge` mm près."""
+        mod = self.modele(forme)
+        if mod is None:
+            return False
+        x0, x1, y0, y1 = mod["zone_apprise"]
+        return x0 - marge <= x <= x1 + marge and y0 - marge <= y <= y1 + marge
 
     def taille_attendue(self, forme, x, y):
         mod = self.modele(forme)
@@ -314,7 +335,8 @@ def juger(mesure, refs=None):
     forme, dist_forme = classer_forme(mesure, refs)
     v = {"forme": forme or "inconnue", "couleur": mesure["couleur"], "conforme": False,
          "raisons": [], "remarques": [], "distance_forme": dist_forme,
-         "ecart_taille_pct": None, "tol_taille_pct": None, "ecart_couleur": None, "tol_couleur": None}
+         "ecart_taille_pct": None, "tol_taille_pct": None, "ecart_couleur": None, "tol_couleur": None,
+         "ecart_teinte": None, "tol_teinte": None}
     if forme is None:
         v["raisons"].append("forme inconnue")
         return v
@@ -326,15 +348,27 @@ def juger(mesure, refs=None):
         v["ecart_couleur"], v["tol_couleur"] = dc, tc
         if dc > tc:
             v["raisons"].append(f"couleur ({mesure['couleur']}, écart {dc:.0f} > {tc:.0f})")
+        # teinte canal par canal (a, b) : voir TOLERANCES["teinte_k"]
+        sab = np.maximum(mod["sigma_ab"], tol["teinte_sigma_min"])
+        z = float(np.max(np.abs(np.asarray(mesure["lab"], float)[1:3] - mod["lab"][1:3]) / sab))
+        v["ecart_teinte"], v["tol_teinte"] = z, tol["teinte_k"]
+        if z > tol["teinte_k"] and dc <= tc:
+            v["raisons"].append(f"teinte ({mesure['couleur']}, {z:.1f} sigma > {tol['teinte_k']:.0f})")
     else:
         v["remarques"].append(f"{forme} non appris : couleur jugée par la teinte")
         if mesure["couleur"] != COULEUR_ATTENDUE[forme]:
             v["raisons"].append(f"couleur {mesure['couleur']} (attendu {COULEUR_ATTENDUE[forme]})")
     # --- taille
-    if mod is not None and refs.unite == mesure["unite"]:
+    if mod is not None and refs.unite == mesure["unite"] and not refs.dans_zone_apprise(
+            forme, mesure["x"], mesure["y"]):
+        # la taille apparente change avec la position (caméra inclinée) et le modèle n'est valable
+        # que là où on a appris : ailleurs (zone verte, zone bleue) on ne juge pas la taille
+        v["remarques"].append("hors de la zone apprise : taille non vérifiée")
+    elif mod is not None and refs.unite == mesure["unite"]:
         ref = refs.taille_attendue(forme, mesure["x"], mesure["y"])
         ecart = (mesure["diametre"] - ref) / ref * 100
-        t = max(tol["taille_min_pct"], tol["taille_k"] * mod["sigma_taille"] / ref * 100)
+        k = tol.get("taille_k_par_forme", {}).get(forme, tol["taille_k"])
+        t = max(tol["taille_min_pct"], k * mod["sigma_taille"] / ref * 100)
         v["ecart_taille_pct"], v["tol_taille_pct"], v["taille_ref"] = ecart, t, ref
         if abs(ecart) > t:
             v["raisons"].append(f"taille {ecart:+.1f}% (tolérance ±{t:.1f}%)")
@@ -352,8 +386,12 @@ def analyser(masqueur, camera, frame_bgr, calib=None, refs=None):
     res = []
     for p in masqueur.pieces(camera, frame_bgr):
         m = mesurer(p, frame_bgr, camera, calib)
-        if m is not None:
-            res.append((p, m, juger(m, refs)))
+        if m is None:
+            continue
+        # hors des zones de pièces (points_table.json : zones_pieces) : bras, câbles, bord de table
+        if m["unite"] == "mm" and calib is not None and not calib.dans_zones_pieces((m["x"], m["y"])):
+            continue
+        res.append((p, m, juger(m, refs)))
     return res
 
 
@@ -402,8 +440,54 @@ def _preparer(args):
 def _texte(img, txt, pos, couleur, taille=0.45):
     # OpenCV n'affiche pas les accents : « écart » -> « ecart »
     txt = unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode()
-    cv2.putText(img, txt, pos, cv2.FONT_HERSHEY_SIMPLEX, taille, (255, 255, 255), 3)
-    cv2.putText(img, txt, pos, cv2.FONT_HERSHEY_SIMPLEX, taille, couleur, 1)
+    # Texte BLANC sur fond noir (lisible sur la table blanche comme sur le bras) ; `couleur` sert
+    # de liseré autour du cadre (vert = OK, rouge = défaut...).
+    ep = 2 if taille >= 0.55 else 1
+    (w, h), base = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, taille, ep)
+    x = int(max(3, min(pos[0], img.shape[1] - w - 6)))
+    y = int(max(h + 5, min(pos[1], img.shape[0] - base - 4)))
+    cv2.rectangle(img, (x - 3, y - h - 4), (x + w + 3, y + base + 2), (0, 0, 0), -1)
+    cv2.rectangle(img, (x - 3, y - h - 4), (x + w + 3, y + base + 2), couleur, 1)
+    cv2.putText(img, txt, (x, y), cv2.FONT_HERSHEY_SIMPLEX, taille, (255, 255, 255), ep, cv2.LINE_AA)
+
+
+def _ascii(txt):
+    return unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode()
+
+
+def _badge(img, n, boite, couleur):
+    """Petit numéro noir sur blanc collé au-dessus du cadre d'une pièce : rien ne masque la pièce.
+    Le détail de la pièce n°n est dans le bandeau du bas (voir _panneau)."""
+    txt = str(n)
+    (w, h), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+    x, y = int(max(boite[0], 0)), int(max(boite[1] - h - 8, 0))
+    cv2.rectangle(img, (x, y), (x + w + 8, y + h + 8), (0, 0, 0), -1)
+    cv2.rectangle(img, (x, y), (x + w + 8, y + h + 8), couleur, 2)
+    cv2.putText(img, txt, (x + 4, y + h + 3), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2,
+                cv2.LINE_AA)
+
+
+def _panneau(img, titre, aide, lignes):
+    """Colle sous l'image un bandeau NOIR : titre (jaune), aide, puis une ligne par pièce
+    [(texte, couleur)] en texte blanc. Largeur de l'image respectée (texte tronqué avec ...)."""
+    f, larg = cv2.FONT_HERSHEY_SIMPLEX, img.shape[1]
+
+    def tenir(txt, taille, ep):
+        txt = _ascii(txt)
+        while len(txt) > 4 and cv2.getTextSize(txt, f, taille, ep)[0][0] > larg - 44:
+            txt = txt[:-4] + "..."
+        return txt
+
+    h_ligne = 30
+    pan = np.zeros((16 + h_ligne * (2 + len(lignes)), larg, 3), np.uint8)
+    cv2.putText(pan, tenir(titre, 0.8, 2), (12, 30), f, 0.8, (0, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(pan, tenir(aide, 0.55, 1), (12, 30 + h_ligne // 1 - 4), f, 0.55, (190, 190, 190), 1,
+                cv2.LINE_AA)
+    for i, (txt, couleur) in enumerate(lignes):
+        y = 30 + h_ligne * (i + 2) - 6
+        cv2.rectangle(pan, (12, y - 14), (26, y), couleur, -1)
+        cv2.putText(pan, tenir(txt, 0.65, 1), (36, y), f, 0.65, (255, 255, 255), 1, cv2.LINE_AA)
+    return np.vstack([img, pan])
 
 
 def commande_apprendre(args):
@@ -419,14 +503,20 @@ def commande_apprendre(args):
             if not ok:
                 continue
             res = analyser(masqueur, nom, frame, calib, refs)
-            img = frame.copy()
-            for p, m, v in res:
-                x1, y1, x2, y2 = p["boite"]
-                cv2.rectangle(img, (x1, y1), (x2, y2), (255, 160, 0), 1)
-                _texte(img, f"{v['forme']} {m['diametre']:.1f}{m['unite']} {m['couleur']}",
-                       (x1, max(y1 - 4, 12)), (255, 160, 0))
-            _texte(img, f"apprendre '{forme}' : {refs.nombre(forme)} echantillons | espace u q",
-                   (10, 22), (0, 0, 255), 0.6)
+            ech = args.echelle
+            img = cv2.resize(frame, None, fx=ech, fy=ech) if ech != 1.0 else frame.copy()
+            lignes = []
+            for i, (p, m, v) in enumerate(res, 1):
+                boite = [int(c * ech) for c in p["boite"]]
+                cv2.rectangle(img, tuple(boite[:2]), tuple(boite[2:]), (255, 160, 0), 2)
+                _badge(img, i, boite, (255, 160, 0))
+                lignes.append((f"{i}   {v['forme']}   {m['diametre']:.1f} {m['unite']}   "
+                               f"{m['couleur']}", (255, 160, 0)))
+            if not res:
+                lignes.append(("aucune piece detectee dans les zones", (128, 128, 128)))
+            img = _panneau(img, f"apprendre '{forme}' : {refs.nombre(forme)} echantillons",
+                           "[espace] enregistrer     [u] annuler le dernier     [q] sauver et quitter",
+                           lignes)
             cv2.imshow(f"apprendre {forme}", img)
             t = cv2.waitKey(30) & 0xFF
             if t == ord(" "):
@@ -486,30 +576,42 @@ def commande_verifier(args):
             if not ok:
                 continue
             res = analyser(masqueur, nom, frame, calib, refs)
-            img = frame.copy()
+            ech = args.echelle
+            img = cv2.resize(frame, None, fx=ech, fy=ech) if ech != 1.0 else frame.copy()
+            lignes_pan = []
             vus = []
-            for p, m, v in res:
+            for i, (p, m, v) in enumerate(res, 1):
                 h = next((h for h in historique if np.hypot(h[0] - m["x"], h[1] - m["y"]) < 8), None)
                 if h is None:
-                    h = [m["x"], m["y"], []]
+                    h = [m["x"], m["y"], [], []]
                 h[0], h[1] = m["x"], m["y"]
                 h[2] = (h[2] + [m["diametre"]])[-30:]
+                h[3] = (h[3] + [v["conforme"]])[-15:]       # verdicts des 15 dernières images
                 vus.append(h)
                 sigma = float(np.std(h[2])) if len(h[2]) >= 5 else float("nan")
-                couleur = (0, 180, 0) if v["conforme"] else (0, 0, 230)
-                x1, y1, x2, y2 = p["boite"]
-                cv2.rectangle(img, (x1, y1), (x2, y2), couleur, 2)
-                ligne1 = f"{v['forme']} {m['diametre']:.1f}{m['unite']}"
+                n_def = h[3].count(False)
+                limite = len(h[3]) >= 5 and 0 < n_def < len(h[3])     # verdict instable : frontière
+                couleur = ((0, 165, 255) if limite else
+                           (0, 180, 0) if v["conforme"] else (0, 0, 230))
+                boite = [int(c * ech) for c in p["boite"]]
+                cv2.rectangle(img, tuple(boite[:2]), tuple(boite[2:]), couleur, 2)
+                _badge(img, i, boite, couleur)
+                ligne = f"{i}   {v['forme']} {m['diametre']:.1f}{m['unite']}"
                 if v["ecart_taille_pct"] is not None:
-                    ligne1 += f" ({v['ecart_taille_pct']:+.1f}%)"
-                ligne2 = ("OK" if v["conforme"] else "DEFAUT: " + "; ".join(v["raisons"]))
-                ligne2 += f"  sigma={sigma:.2f}"
-                _texte(img, ligne1, (x1, max(y1 - 18, 12)), couleur)
-                _texte(img, ligne2, (x1, max(y1 - 4, 26)), couleur, 0.4)
+                    ligne += f" ({v['ecart_taille_pct']:+.1f}%)"
+                if limite:
+                    ligne += f"   LIMITE: defaut sur {n_def}/{len(h[3])} images"
+                    if v["raisons"]:
+                        ligne += " (" + "; ".join(v["raisons"]) + ")"
+                else:
+                    ligne += "   OK" if v["conforme"] else "   DEFAUT: " + "; ".join(v["raisons"])
+                ligne += f"   sigma={sigma:.2f}"
+                lignes_pan.append((ligne, couleur))
             historique = vus
-            _texte(img, f"verifier ({nom}) : c = enregistrer, q = quitter", (10, 22), (0, 0, 255), 0.6)
-            if args.echelle != 1.0:
-                img = cv2.resize(img, None, fx=args.echelle, fy=args.echelle)
+            if not res:
+                lignes_pan.append(("aucune piece detectee dans les zones", (128, 128, 128)))
+            img = _panneau(img, f"verifier ({nom}) : vert = OK, rouge = defaut, orange = limite",
+                           "[c] enregistrer les mesures     [q] quitter", lignes_pan)
             cv2.imshow("verifier conformite", img)
             t = cv2.waitKey(30) & 0xFF
             if t == ord("c") and res:
@@ -519,14 +621,18 @@ def commande_verifier(args):
                     if nouveau:
                         w.writerow(["horodatage", "forme", "couleur", "conforme", "raisons", "x", "y",
                                     "diametre", "unite", "ecart_taille_pct", "ecart_couleur",
-                                    "solidite", "remplissage"])
+                                    "solidite", "remplissage", "ecart_teinte", "L", "a", "b",
+                                    "distance_forme"])
                     for _, m, v in res:
                         w.writerow([time.strftime("%Y-%m-%d %H:%M:%S"), v["forme"], m["couleur"],
                                     v["conforme"], " ; ".join(v["raisons"]), f"{m['x']:.1f}",
                                     f"{m['y']:.1f}", f"{m['diametre']:.2f}", m["unite"],
                                     "" if v["ecart_taille_pct"] is None else f"{v['ecart_taille_pct']:.2f}",
                                     "" if v["ecart_couleur"] is None else f"{v['ecart_couleur']:.1f}",
-                                    f"{m['solidite']:.3f}", f"{m['remplissage']:.3f}"])
+                                    f"{m['solidite']:.3f}", f"{m['remplissage']:.3f}",
+                                    "" if v["ecart_teinte"] is None else f"{v['ecart_teinte']:.2f}",
+                                    f"{m['lab'][0]:.1f}", f"{m['lab'][1]:.1f}", f"{m['lab'][2]:.1f}",
+                                    f"{v['distance_forme']:.2f}"])
                 print(f"  {len(res)} mesure(s) ajoutée(s) à {csv_f}")
             elif t == ord("q"):
                 break
@@ -546,6 +652,7 @@ if __name__ == "__main__":
     a.add_argument("--images", type=int, default=10, help="images moyennées par échantillon")
     a.add_argument("--forcer", action="store_true",
                    help="accepter une pièce dont la couleur ne correspond pas à la forme")
+    a.add_argument("--echelle", type=float, default=1.4, help="agrandissement de la fenêtre")
     a.set_defaults(fn=commande_apprendre)
     v = sub.add_parser("verifier", help="afficher le verdict de chaque pièce en direct")
     v.add_argument("--cam", required=True, help="caméra du dessus, ex. top=4")

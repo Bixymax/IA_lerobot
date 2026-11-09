@@ -20,8 +20,10 @@ pièces entre deux épisodes, il faut donc refaire le choix (touche de la forme 
 """
 import threading
 
+import cv2
 import numpy as np
 
+from masquage import SEUIL_DIFF
 from conformite import analyser, couleur_par_teinte, juger, mediane_mesures
 
 MODES = ("triangle", "rond", "hexagone", "etoile", "defaut")
@@ -38,7 +40,7 @@ def _distance_boite(p, boite):
 class Selection:
     def __init__(self, masqueur, calib, refs, camera_ref="top", mode=None, porte=12.0,
                  porte_cible=80.0, porte_reprise=150.0, oublier=150, memoire=7, stable=3,
-                 porte_image=25.0):
+                 porte_image=25.0, oubli_libre=3):
         """porte          : déplacement max (mm, ou px sans calibration) d'une pièce immobile
                             entre deux détections pour garder la même piste
            porte_cible    : idem pour la cible, qui peut être déplacée par le bras
@@ -48,7 +50,12 @@ class Selection:
            memoire        : mesures gardées par pièce (verdict sur leur médiane)
            stable         : mesures minimum avant qu'une pièce puisse être choisie
            porte_image    : distance max (px) entre la projection d'une pièce et une détection
-                            sur les autres caméras"""
+                            sur les autres caméras
+           oubli_libre    : une pièce non revue dont l'emplacement est VIDE (l'image y est égale au
+                            fond) est oubliée après ce nombre de détections (3 = ~1 s à 3/s). Si
+                            quelque chose le recouvre (le bras), on la garde jusqu'à `oublier` ;
+                            la cible n'est jamais oubliée ainsi (elle peut être dans la pince).
+                            Sans cela, le cadre d'une pièce partie efface ce qui passe dedans."""
         self.masqueur = masqueur
         self.calib = calib
         self.refs = refs
@@ -56,6 +63,7 @@ class Selection:
         self.porte, self.porte_cible, self.porte_reprise = porte, porte_cible, porte_reprise
         self.oublier, self.memoire, self.stable = oublier, memoire, stable
         self.porte_image = porte_image
+        self.oubli_libre = oubli_libre
         self.verrou = threading.Lock()
         self.pistes = []
         self._prochain = 0
@@ -90,19 +98,47 @@ class Selection:
         return ev
 
     # ---- caméra de référence ------------------------------------------------
+    def _est_une_piece(self, mesure):
+        """Hors des zones de pièces (calibration.zones_pieces) : bord de table, robot, câbles...
+        On ne le suit pas, donc on ne l'efface jamais."""
+        if mesure.get("unite") != "mm" or self.calib is None:
+            return True
+        return self.calib.dans_zones_pieces((mesure["x"], mesure["y"]))
+
     def _unite(self):
         return "mm" if self.calib is not None and self.calib.a(self.camera_ref) else "px"
 
     def maj_reference(self, frame):
         """Nouvelle image de la caméra du dessus : mesure, suivi, choix de la cible."""
         dets = [{"boite": p["boite"], "mesure": m}
-                for p, m, _ in analyser(self.masqueur, self.camera_ref, frame, self.calib, None)]
+                for p, m, _ in analyser(self.masqueur, self.camera_ref, frame, self.calib, None)
+                if self._est_une_piece(m)]
         with self.verrou:
-            self._suivre(dets)
+            self._suivre(dets, self._emplacements_vides(frame))
             if not self.verrouille and self.mode is not None:
                 self._choisir()
 
-    def _suivre(self, dets):
+    def _emplacements_vides(self, frame):
+        """Ids des pistes dont la boîte est maintenant identique au fond (la pièce n'y est plus)."""
+        fond = self.masqueur.fonds.get(str(self.camera_ref))
+        if fond is None or not self.pistes:
+            return set()
+        gain = self.masqueur._gain_lumiere(frame, fond)
+        h, w = frame.shape[:2]
+        vides = set()
+        for p in self.pistes:
+            x1, y1, x2, y2 = p["boite"]
+            x1, y1, x2, y2 = max(int(x1), 0), max(int(y1), 0), min(int(x2), w), min(int(y2), h)
+            if x2 - x1 < 3 or y2 - y1 < 3:
+                continue
+            f = cv2.GaussianBlur(frame[y1:y2, x1:x2], (5, 5), 0).astype(np.int16)
+            g = cv2.GaussianBlur(self.masqueur._appliquer_gain(fond, gain, (y1, y2, x1, x2)),
+                                 (5, 5), 0).astype(np.int16)
+            if (np.abs(f - g).max(axis=2) > SEUIL_DIFF).mean() < 0.03:
+                vides.add(p["id"])
+        return vides
+
+    def _suivre(self, dets, vides=frozenset()):
         def dist(piste, d):
             return float(np.hypot(piste["x"] - d["mesure"]["x"], piste["y"] - d["mesure"]["y"]))
 
@@ -136,6 +172,8 @@ class Selection:
         for p in self.pistes:
             if p["id"] not in pris_p:
                 p["rates"] += 1
+                # emplacement vide : la pièce est partie (sinon le bras la masque : on la garde)
+                p["vide"] = p.get("vide", 0) + 1 if (p["id"] in vides and p["id"] != self.cible_id) else 0
         for j, d in enumerate(dets):
             if j not in pris_d:
                 piste = {"id": self._prochain, "rates": 0, "mesures": [],
@@ -144,7 +182,8 @@ class Selection:
                 self._maj_piste(piste, d)
                 self.pistes.append(piste)
         avant = {p["id"] for p in self.pistes}
-        self.pistes = [p for p in self.pistes if p["rates"] <= self.oublier]
+        self.pistes = [p for p in self.pistes
+                       if p["rates"] <= self.oublier and p.get("vide", 0) < self.oubli_libre]
         if self.cible_id in avant and self._piste(self.cible_id) is None:
             self.evenements.append("cible perdue (plus vue depuis longtemps)")
         # une pièce apparue pendant le verrou, immobile depuis un moment : probablement posée à
@@ -164,6 +203,7 @@ class Selection:
         piste["x"], piste["y"] = m["x"], m["y"]
         piste["mesures"] = (piste["mesures"] + [m])[-self.memoire:]
         piste["rates"] = 0
+        piste["vide"] = 0
         piste["verdict"] = juger(mediane_mesures(piste["mesures"]), self.refs)
 
     def _piste(self, pid):

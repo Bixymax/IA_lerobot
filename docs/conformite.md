@@ -80,10 +80,32 @@ améliorer l'éclairage (moins de bruit), ou restreindre la zone d'alimentation.
 |---|---|---|
 | forme | plus proche des formes apprises | plus proche des prototypes mesurés sur vos photos |
 | couleur | écart Lab ≤ max(10, 3 × dispersion des OK) | nom de couleur (teinte) = couleur attendue |
-| taille | écart ≤ max(2,5 %, 3 × dispersion des OK) | non vérifiée (signalé) |
+| teinte (a, b de Lab, sans la clarté) | chaque canal ≤ 3 × sa dispersion (plancher 3) | — |
+| taille | écart ≤ max(2,5 %, 3 × dispersion des OK) **dans la zone apprise** | non vérifiée (signalé) |
+
+- La **teinte** est jugée canal par canal : la clarté et les reflets (le rond brille) gonflent
+  l'écart global de couleur et laissaient passer un rond jaune pris pour un rond orange.
+- La **taille** n'est jugée que dans le rectangle des échantillons (+ 40 mm) : la caméra n'est
+  pas verticale, la taille apparente change avec la position et le modèle ne vaut rien ailleurs
+  (zones verte et bleue : remarque « hors de la zone apprise : taille non vérifiée »). Il faut donc
+  apprendre **dans la zone d'alimentation**, partout où des pièces seront posées.
+- `taille_k` = 3 (2 détecte mieux les petites déformations, mais ne laisse aucune marge à une
+  dérive de lumière : à n'essayer qu'avec un éclairage stable). `taille_k_par_forme` : l'étoile,
+  dont le « diamètre » dépend de l'orientation, garde 3.
+- Dans `verifier`, une pièce dont le verdict change sur les 15 dernières images est **orange
+  (LIMITE)** : elle est à la frontière d'une tolérance. Le flux, lui, juge la médiane des 7
+  dernières mesures.
+- **Rond et hexagone se ressemblent** (4 hexagones sur 69 classés rond) : un rond jaune est reconnu
+  comme défaut soit par sa teinte (classé rond), soit par sa taille (classé hexagone).
 
 Les tolérances se règlent dans `fonds/references.json`, clé `tolerances`
-(`taille_min_pct`, `taille_k`, `couleur_min`, `couleur_k`, `forme_max`).
+(`taille_min_pct`, `taille_k`, `taille_k_par_forme`, `couleur_min`, `couleur_k`, `teinte_k`,
+`teinte_sigma_min`, `forme_max`). Elles sont sauvées AVEC les références : modifier les valeurs par
+défaut dans `conformite.py` ne change pas une installation déjà apprise.
+
+Les objets détectés **hors des zones de pièces** (`zones_pieces` dans `fonds/points_table.json` :
+alimentation, déchet, échange, marge 30 mm) ne sont pas des pièces (bord de table, robot, câbles) :
+ni suivis, ni effacés.
 
 ### Choix et verrouillage de la cible
 

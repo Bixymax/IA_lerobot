@@ -46,7 +46,9 @@ POINTS_DEFAUT = {
               "par la caméra top, x vers la droite, y vers le robot. VÉRIFIEZ à la règle (A5 supposé) "
               "et ajoutez d'autres coins si besoin (4 points visibles minimum par caméra). "
               "zone_alimentation (facultatif) : polygone en mm ; seules les pièces dedans peuvent "
-              "être choisies comme cible."),
+              "être choisies comme cible. zones_pieces (facultatif) : liste de polygones en mm "
+              "(alimentation, déchet, échange) ; un objet détecté hors de ces zones (+30 mm) n'est "
+              "pas une pièce (bord de table, robot) et n'est jamais effacé."),
     "points": {
         "vert_haut_gauche": [0.0, 0.0],
         "vert_haut_droite": [210.0, 0.0],
@@ -54,6 +56,7 @@ POINTS_DEFAUT = {
         "vert_bas_gauche": [0.0, 148.0],
     },
     "zone_alimentation": None,
+    "zones_pieces": None,
 }
 
 
@@ -74,11 +77,14 @@ class Calibration:
     Les homographies sont mémorisées pour la taille d'image de la calibration ; une image d'une
     autre résolution (ex. 1280x960 au lieu de 640x480) est remise à l'échelle automatiquement."""
 
-    def __init__(self, cameras=None, zone=None):
+    def __init__(self, cameras=None, zone=None, zones_pieces=None):
         # cameras : {nom: {"H": matrice 3x3 image->table, "taille": (largeur, hauteur)}}
         self.cameras = {nom: {"H": np.asarray(c["H"], np.float64), "taille": tuple(c["taille"])}
                         for nom, c in (cameras or {}).items()}
         self.zone = None if zone is None else np.asarray(zone, np.float32)
+        # zones où des pièces peuvent se trouver (alimentation, déchet, échange) : une « pièce »
+        # détectée ailleurs (bord de table, robot, câbles) n'en est pas une et n'est jamais effacée
+        self.zones_pieces = [np.asarray(z, np.float32) for z in (zones_pieces or [])]
 
     # ---- fichiers ---------------------------------------------------------
     @classmethod
@@ -87,10 +93,12 @@ class Calibration:
         dossier = Path(dossier)
         fichier = dossier / CALIB_FICHIER
         cameras = json.loads(fichier.read_text()) if fichier.exists() else {}
-        zone = None
+        zone, zones_pieces = None, None
         if (dossier / POINTS_FICHIER).exists():
-            zone = json.loads((dossier / POINTS_FICHIER).read_text()).get("zone_alimentation")
-        return cls(cameras, zone)
+            points = json.loads((dossier / POINTS_FICHIER).read_text())
+            zone = points.get("zone_alimentation")
+            zones_pieces = points.get("zones_pieces")
+        return cls(cameras, zone, zones_pieces)
 
     def sauver(self, dossier):
         fichier = Path(dossier) / CALIB_FICHIER
@@ -133,6 +141,16 @@ class Calibration:
             return True
         return cv2.pointPolygonTest(self.zone.reshape(-1, 1, 2),
                                     (float(point_mm[0]), float(point_mm[1])), False) >= 0
+
+
+    def dans_zones_pieces(self, point_mm, marge=30.0):
+        """True si le point est dans l'une des zones de pièces, à `marge` mm près (ou si aucune
+        zone n'est définie : pas de filtre)."""
+        if not self.zones_pieces:
+            return True
+        pt = (float(point_mm[0]), float(point_mm[1]))
+        return any(cv2.pointPolygonTest(z.reshape(-1, 1, 2), pt, True) >= -marge
+                   for z in self.zones_pieces if len(z) >= 3)
 
 
 def calculer_homographie(points_px, points_mm):
