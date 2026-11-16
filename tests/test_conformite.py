@@ -415,3 +415,28 @@ def test_verdict_incertain_pres_de_la_tolerance(refs):
     m3 = {**m, "solidite": 0.3, "remplissage": 0.1, "regularite": 0.2, "harmoniques": [0.5] * 5}
     v3 = C.juger(m3, refs)
     assert v3["forme"] == "inconnue" and v3["incertain"]
+
+
+def test_rond_et_hexagone_reels_pas_ambigus():
+    """Régression (2026-11-16) : avec l'ancien critère (moyenne quadratique des écarts), les 11 ronds
+    OK mesurés étaient tous « ambigus » face à l'hexagone et jamais sélectionnés. Statistiques
+    (moyenne, écart-type) des échantillons réels appris : solidité, remplissage, régularité, h3, h5, h6."""
+    stats = {"rond": ([0.976, 0.846, 0.853, 0.005, 0.006, 0.006], [0.004, 0.016, 0.019, 0.003, 0.003, 0.004]),
+             "hexagone": ([0.96, 0.782, 0.81, 0.01, 0.009, 0.035], [0.005, 0.025, 0.026, 0.005, 0.004, 0.006])}
+
+    def mesure(v):
+        return {"solidite": v[0], "remplissage": v[1], "regularite": v[2],
+                "harmoniques": [0, v[3], 0, v[4], v[5]], "unite": "mm", "x": 0.0, "y": 0.0,
+                "diametre": 30.0, "lab": [50.0, 0.0, 0.0], "couleur": "orange"}
+
+    rng = np.random.default_rng(0)
+    refs = C.References()
+    for forme, (mu, sd) in stats.items():
+        refs.ajouter(forme, [mesure(rng.normal(mu, sd)) for _ in range(40)])
+    for forme in ("rond", "hexagone"):
+        mu, sd = stats[forme]
+        v = C.juger(mesure(np.array(mu) + 0.5 * np.array(sd)), refs)
+        assert v["forme"] == forme and not v["forme_ambigue"]
+    # entre les deux formes (35 % du chemin du rond vers l'hexagone) : vraiment ambigu
+    a, b = np.array(stats["rond"][0]), np.array(stats["hexagone"][0])
+    assert C.juger(mesure(a + 0.35 * (b - a)), refs)["forme_ambigue"]

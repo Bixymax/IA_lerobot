@@ -62,7 +62,9 @@ PROTOTYPES_VECTEUR = {"triangle": (0.95, 0.45, 0.52, 0.29, 0.00, 0.11),
                       "hexagone": (0.97, 0.82, 0.87, 0.00, 0.00, 0.06),
                       "etoile": (0.80, 0.50, 0.50, 0.00, 0.33, 0.00)}
 SIGMA_VECTEUR_MIN = np.array([0.015, 0.012, 0.015, 0.02, 0.02, 0.015])
-AMBIGUITE_MIN = 1.5     # écart (en écarts-types) exigé entre la meilleure forme et la deuxième
+AMBIGUITE_MIN = 4.0     # écart exigé entre la meilleure forme et la deuxième, en somme de carrés d'écarts-types
+                        # (log-vraisemblance) : la moyenne quadratique diluait les 3 mesures qui séparent
+                        # rond et hexagone parmi 6 et rendait tous les ronds « ambigus » (mesuré le 2026-11-16)
 ZONE_INCERTAINE = (0.8, 1.25)   # écart / tolérance : dans cette plage le verdict est « incertain »
 
 
@@ -387,7 +389,8 @@ def juger(mesure, refs=None):
     refs = refs if refs is not None else References()
     tol = refs.tolerances
     forme, dist_forme = classer_forme(mesure, refs)
-    dists = sorted(distances_forme(mesure, refs).values())
+    n_mesures = len(vecteur_forme(mesure))
+    dists = sorted(n_mesures * d * d for d in distances_forme(mesure, refs).values())
     ambigue = len(dists) > 1 and (dists[1] - dists[0]) < AMBIGUITE_MIN
     v = {"forme_ambigue": bool(ambigue), "incertain": False, "marge": None, "forme": forme or "inconnue", "couleur": mesure["couleur"], "conforme": False,
          "raisons": [], "remarques": [], "distance_forme": dist_forme,
