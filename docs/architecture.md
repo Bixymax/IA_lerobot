@@ -16,9 +16,25 @@
 | Vision – calibration | Pixels ↔ mm de la table, par caméra | Fait (`calibration.py`) |
 | Vision – sélection | Cible choisie sur `top`, verrouillée, retrouvée sur les autres caméras | Fait (`selection.py`) |
 | Vision – masquage | Efface les pièces non ciblées dans les images du modèle | Fait (`masquage.py`) |
-| Modèle de gestes | Politique LeRobot (ACT) entraînée par imitation | 1er modèle : triangle seul |
+| Modèle de gestes | Politique LeRobot (ACT) entraînée par imitation | **2 modèles** (voir ci-dessous) ; 1er essai : triangle seul |
 | Orchestrateur | Demandes P-Robo, choix de la cible, verrou, nouvelles tentatives | À faire |
 | Communication | TCP avec P-Robo | Proposition + serveur de référence (`docs/protocole_tcp.md`, `echange_tcp.py`) ; à faire valider par P-Robo |
+
+## Décision (2026-11-16) : deux modèles, choisis selon la destination
+
+On entraîne **deux** politiques, une par destination :
+
+| Modèle | Destination | Dataset | Cible montrée par le flux (`flux_masque.py`) |
+|---|---|---|---|
+| « échange » | zone d'échange (bleue) | `Bixymax/so101_masque_echange_<forme>` | pièce **conforme** d'une forme : touches `t r h e` |
+| « poubelle » | zone de déchets (verte) | `Bixymax/so101_masque_poubelle` | pièce **défectueuse** : touche `d` |
+
+Le modèle ne décide pas où aller : la caméra ne lui montre que la pièce à déplacer (les autres sont
+effacées) et c'est **le logiciel** qui juge (forme, taille, couleur : `conformite.py`, `selection.py`).
+À l'inférence, l'orchestrateur choisit la pièce, la montre via le flux, puis lance le modèle qui
+correspond à sa destination (conforme -> « échange », défectueuse -> « poubelle »).
+Conséquence : une erreur du logiciel de conformité = une mauvaise étiquette apprise ou un mauvais
+modèle lancé ; d'où le bilan de `scripts/bilan_formes.py` (0 erreur sur 79 mesures le 2026-11-16).
 
 ## Décision : masquage plutôt que ré-entraînement en scène encombrée
 

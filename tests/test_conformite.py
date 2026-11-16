@@ -440,3 +440,22 @@ def test_rond_et_hexagone_reels_pas_ambigus():
     # entre les deux formes (35 % du chemin du rond vers l'hexagone) : vraiment ambigu
     a, b = np.array(stats["rond"][0]), np.array(stats["hexagone"][0])
     assert C.juger(mesure(a + 0.35 * (b - a)), refs)["forme_ambigue"]
+
+
+def test_nouvelle_cible_change_de_piece():
+    """Régression (2026-11-16) : `n` redonnait toujours la pièce la plus isolée. Maintenant les
+    cibles tournent parmi les candidats, puis recommencent quand toutes ont été choisies."""
+    sel = Selection(None, None, None, mode="defaut")
+    verdict = {"conforme": False, "incertain": False, "forme": "etoile", "couleur": "rouge",
+               "raisons": ["couleur"]}
+    sel.pistes = [{"id": i, "x": 100.0 * i, "y": 0.0, "rates": 0, "mesures": [1, 2, 3],
+                   "vue_immobile": 5, "connue": True, "verdict": verdict} for i in range(3)]
+    choisies = []
+    for _ in range(6):
+        sel.nouvelle_cible()
+        sel._choisir()
+        choisies.append(sel.cible_id)
+    assert set(choisies[:3]) == {0, 1, 2}              # les 3 pièces, chacune une fois
+    assert choisies[3:] == choisies[:3]                # puis le cycle recommence
+    sel.definir("manuel")
+    assert sel.deja_choisies == set()

@@ -1,5 +1,42 @@
 # Prochaine session au local robot : état et reprise
 
+## Séance du 2026-11-16 (résumé, le plus récent d'abord)
+
+**Enregistré et poussé sur Hugging Face (publics)** : modèle « poubelle » = pièce défectueuse -> zone verte.
+- `Bixymax/so101_masque_poubelle_20261116_161455` : 27 épisodes (30 enregistrés, 0, 3 et 5 supprimés : deux
+  pièces visibles sur `top` ou `side`) ; sauvegarde locale `…_161455_old` à supprimer.
+- `Bixymax/so101_masque_poubelle_2_20261116_165836` : 20 épisodes, une seule pièce visible sur `top` et
+  `side` à chaque début d'épisode (contrôle automatique 20/20).
+- **Pas encore fait : le dataset « échange »** (pièce conforme -> zone bleue, touches `t r h e`, un seul
+  dataset toutes formes mélangées, ~40 épisodes), ni la fusion des 2 datasets poubelle
+  (`lerobot-edit-dataset --operation.type merge`, syntaxe à vérifier), ni l'entraînement.
+- Cette version de LeRobot ajoute la date au nom du dataset (`repo_id` + `_AAAAMMJJ_HHMMSS`).
+
+**Réglages / validation** : fond refait 15 h 36 ; références ×4 apprises (~52 échantillons par forme) ;
+bilan sur 79 mesures étiquetées : 0 erreur de forme, 0 défaut classé OK, 0 bonne pièce classée défaut.
+Correctifs : ambiguïté rond/hexagone (commit 2d4bb40) ; **rotation des cibles avec `n`** (`selection.py`,
+**non commité** : avant, `n` redonnait toujours la pièce la plus isolée).
+
+**Pièges rencontrés**
+- L'épisode 0 démarre dès la connexion : poser les pièces, taper la touche (`d`, `r`...) ou `n` et vérifier
+  `top` ET `side` dans Rerun AVANT de lancer `lerobot-record`.
+- Pièces posées après le choix de la cible : restent visibles (verrou) -> `n` après avoir tout posé.
+- Commande collée sur une ligne avec des `\` : « unrecognized arguments » -> une seule ligne sans antislash.
+- Erreur `Torque_Enable id_=5 Incorrect status packet` au démarrage : liaison/alimentation du follower
+  (rebrancher le câble du moteur 5, vérifier l'alimentation), pas un bug logiciel.
+- La lumière dérive en fin de journée : l'image de `top` est devenue saturée/magenta pendant le flux alors
+  que les épisodes enregistrés sont restés stables (cause non élucidée). Fond et références datent de
+  15 h 36 ; à refaire dans la lumière de la prochaine séance (stores fermés, éclairage artificiel).
+- Reste : étoile parfois non effacée sur `side` (références étoile avec un échantillon aberrant à 15,6 mm,
+  non touchées) ; fantômes pâles des pièces effacées sur `top` ; hexagone long à choisir.
+
+**Reprise** : checklist A à F (fond + références dans la lumière du jour), puis G pour le dataset
+« échange », fusion, entraînement. Sauvegarde de `fonds/` : `~/sauvegardes_pia/fonds_2026-11-16`
+(`fonds/` n'est pas versionné). Index du jour : `SIDE=2 TOP=4 ANGLE45=0`, `PORT_FOLLOWER=/dev/ttyACM0`,
+`PORT_LEADER=/dev/ttyACM1` (à revérifier : ils changent).
+
+(Ce qui suit date du 2026-11-09 ; l'état à jour est ci-dessus.)
+
 Dernière séance : **2026-11-09** (premier passage avec la checklist). Procédure complète :
 `docs/checklist_enregistrement.md`. Ici : où on s'est arrêté, dans l'ordre.
 

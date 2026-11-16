@@ -72,6 +72,7 @@ class Selection:
         self.mode = mode
         self.cible_id = None
         self.verrouille = False
+        self.deja_choisies = set()    # pistes déjà choisies : `n` passe à une autre pièce (rotation)
         self.evenements = []          # messages pour le terminal du flux (lus par lire_evenements)
 
     # ---- commandes ----------------------------------------------------------
@@ -80,6 +81,8 @@ class Selection:
         if mode is not None and mode not in MODES:
             raise ValueError(f"mode inconnu : {mode}")
         with self.verrou:
+            if mode != self.mode:
+                self.deja_choisies.clear()
             self.mode = mode
             self._liberer()
 
@@ -258,7 +261,14 @@ class Selection:
             autres = [np.hypot(p["x"] - o["x"], p["y"] - o["y"]) for o in self.pistes if o is not p]
             return min(autres, default=1e9)
 
-        cible = max(candidats, key=isolement)
+        # Rotation : `n` ne redonne pas la même pièce tant qu'une autre convient (sinon c'était
+        # toujours la plus isolée, par exemple la même étoile à chaque épisode).
+        neuves = [p for p in candidats if p["id"] not in self.deja_choisies]
+        if not neuves:
+            self.deja_choisies.clear()
+            neuves = candidats
+        cible = max(neuves, key=isolement)
+        self.deja_choisies.add(cible["id"])
         self.cible_id = cible["id"]
         self.verrouille = True
         for p in self.pistes:
