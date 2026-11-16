@@ -74,6 +74,21 @@ dispersion réelle (`sigma`)** : un défaut plus petit qu'environ 3 sigma n'est 
 façon fiable. Si c'est insuffisant : rapprocher ou zoomer la caméra `top` (plus de pixels par mm),
 améliorer l'éclairage (moins de bruit), ou restreindre la zone d'alimentation.
 
+### Forme : profil radial et pièces « incertaines »
+
+La forme est lue sur six mesures du contour : solidité, remplissage, **régularité radiale**
+(rayon mini / rayon maxi autour du centre : rond ~0,97, hexagone ~0,87, triangle ~0,5) et les
+**harmoniques 3, 5, 6** du profil r(angle) (triangle, étoile, hexagone). L'aire seule séparait mal
+rond et hexagone : sur vos mesures du 2026-11-09 elle donne un écart de ~0,03, et l'ancien plancher
+de dispersion (0,03) rendait donc tout ambigu (planchers abaissés à 0,012-0,02).
+
+Un verdict est **incertain** (`incertain`, affiché `?`) si : la forme est ambiguë (deuxième forme à
+moins de 1,5 écart-type de la première), la forme est inconnue, ou un contrôle (taille, teinte,
+couleur) est à moins de 25 % de sa limite, d'un côté comme de l'autre. **Le flux ne choisit jamais
+une pièce incertaine** : on perd quelques pièces, mais aucune ne reçoit une mauvaise étiquette.
+`mesures_v2.csv` contient ces mesures et une colonne `vraie_forme` à remplir pour vérifier le
+classement sur de vraies pièces.
+
 ### Verdict
 
 | Contrôle | Forme apprise | Forme pas encore apprise |
@@ -155,7 +170,7 @@ python conformite.py apprendre --cam top=$TOP --forme hexagone
 python conformite.py apprendre --cam top=$TOP --forme triangle
 python conformite.py apprendre --cam top=$TOP --forme rond
 
-# 4. Vérification avec des pièces OK ET défectueuses (c = enregistrer dans fonds/mesures.csv)
+# 4. Vérification avec des pièces OK ET défectueuses (c = enregistrer dans fonds/mesures_v2.csv)
 python conformite.py verifier --cam top=$TOP
 
 # 5. Flux masqué pour l'enregistrement (voir docs/flux_masque.md)

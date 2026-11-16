@@ -204,6 +204,24 @@ class FluxMasque:
                     e["t_det"] = -1e9
             print(f"[flux] nouvelle cible ({self.forme or 'aucune'})")
 
+    def choisir_piece(self, pid):
+        """Mode manuel : montre la pièce n° pid (numéros : commande l), sans jugement du logiciel."""
+        if self.selection is None:
+            print("[flux] choix manuel indisponible sans sélection (caméra de référence absente)")
+            return
+        with self.verrou:
+            self._forme = "manuel"
+            self._generation += 1
+            for e in self.etat.values():
+                e["t_det"] = -1e9
+        print(f"[flux] {self.selection.choisir_piece(pid)}")
+
+    def lister_pieces(self):
+        if self.selection is None:
+            return
+        lignes = self.selection.liste()
+        print("[flux] pièces vues :" + ("".join("\n   " + l for l in lignes) if lignes else " aucune"))
+
     def mode_brut(self, actif):
         with self.verrou:
             self._brut = actif
@@ -360,11 +378,21 @@ class FluxMasque:
 # --------------------------------------------------------------------------- #
 def appliquer_commande(flux, cmd):
     """Applique une commande clavier ; renvoie False pour quitter."""
-    cmd = cmd.strip().lower()[:1]
+    cmd = cmd.strip().lower()
+    if cmd.isdigit():
+        flux.choisir_piece(int(cmd))
+        return True
+    cmd = cmd[:1]
     if cmd == "q":
         return False
     if cmd in FORMES and (cmd != "d" or flux.selection is not None):
         flux.choisir_forme(FORMES[cmd])
+    elif cmd == "l":
+        flux.lister_pieces()
+    elif cmd == "n" and flux.forme == "manuel":
+        print("[flux] mode manuel : replacez les pièces, puis tapez le numéro de la pièce (l = liste)")
+        flux.selection.nouvelle_cible()
+        flux.choisir_forme("manuel")
     elif cmd == "n":
         flux.nouvelle_cible()
     elif cmd == "a":
@@ -375,6 +403,7 @@ def appliquer_commande(flux, cmd):
         flux.mode_brut(False)
     elif cmd:
         print("[flux] commandes : t r h e (forme OK), d (défectueuse), n (nouvelle cible), "
+              "l (liste des pièces), NUMÉRO (montrer cette pièce, sans jugement du logiciel), "
               "a (aucune), b (brut), m (masque), q (quitter)")
     return True
 

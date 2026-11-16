@@ -17,6 +17,10 @@ Nappe : **rouge = alimentation** (pièces de départ), **vert = déchet** (poube
 - [ ] `./setup_local.sh --sans-sudo` (voir ce qui manque)
 - [ ] Imprimer : ce document, les 4 formes OK et quelques défectueuses à emporter (dont un rond d'une
       mauvaise couleur et une pièce déformée), règle graduée
+- [ ] **Préparer les pièces étalon** : un jeu de pièces dont VOUS connaissez la vérité (forme + bonne /
+      défectueuse), numérotées au dos au feutre. Idéal : 5 bonnes par forme + toutes les défectueuses
+      disponibles (mauvaise taille, mauvaise couleur, y compris des ronds jaunes et des hexagones
+      orange : ce sont les cas qui se confondent). Sert à mesurer les erreurs du logiciel (étape F)
 - [ ] Ruban adhésif de couleur (repérer pieds des caméras, repasser les traits de la nappe)
 
 ## B. Matériel
@@ -67,13 +71,24 @@ doivent correspondre).
       chacune, DANS LA ZONE ROUGE, répartie partout** (la taille n'est jugée que là où on a appris)
 - [ ] `python conformite.py verifier --cam top=$TOP` **dans la zone rouge** : les 4 formes conformes
       sont vertes ; le rond d'une mauvaise couleur et la pièce déformée sont rouges ou orange (LIMITE) ;
-      relever `sigma` (un défaut < 3 × sigma n'est pas détectable). `c` enregistre dans `fonds/mesures.csv`.
+      relever `sigma` (un défaut < 3 × sigma n'est pas détectable). `c` enregistre dans `fonds/mesures_v2.csv` : **remplir la colonne `vraie_forme`** (la vérité, connue de vous) pour mesurer les erreurs du logiciel.
+- [ ] **Bilan sur les pièces étalon** (nouveau) : passer CHAQUE pièce étalon seule dans `verifier`, `c`,
+      puis remplir `vraie_forme` et `vraie_etat` dans `fonds/mesures_v2.csv` et lancer
+      `python scripts/bilan_formes.py`. **Critère : aucune erreur forme (surtout rond/hexagone), aucun
+      défaut classé OK, aucune bonne pièce classée défaut.** Les pièces « incertaines » (`?`) sont
+      normales : elles ne seront jamais choisies. Si > 20 % de pièces incertaines ou une erreur de
+      forme persiste : rapprocher la caméra `top`, rapprendre dans la même lumière, ou utiliser le
+      mode manuel (G).
 - [ ] Ne pas resserrer `taille_k` tant que la lumière n'est pas stable (voir `docs/conformite.md`)
 
 ## G. Premier enregistrement (essai de 3 épisodes, sans push)
 - [ ] Dataset de test : `--dataset.num_episodes=3 --dataset.push_to_hub=false`
 - [ ] Pour chaque épisode : replacer les pièces, **refaire le choix de la cible** (touche de forme / `d` / `n`),
-      vérifier le cadre vert, puis prendre cette pièce avec le leader
+      vérifier le cadre vert, puis prendre cette pièce avec le leader. Le flux ne choisit jamais une pièce
+      `?` (incertaine). **Contrôle humain : la pièce encadrée est bien celle que le dataset annonce**
+      (une forme OK pour « échange », une défectueuse pour « poubelle »)
+- [ ] Mode manuel si le logiciel hésite : `l` liste les pièces, puis taper le NUMÉRO de la pièce voulue
+      (aucun jugement du logiciel : à utiliser avec les pièces étalon dont vous connaissez l'état)
 - [ ] Rejouer / relire le dataset : les images sont masquées, une seule pièce visible, 3 caméras synchronisées
 - [ ] Si OK : supprimer le dataset de test, lancer la série (50 épisodes), **une séance d'un seul tenant**,
       sans toucher aux caméras ni à la lumière

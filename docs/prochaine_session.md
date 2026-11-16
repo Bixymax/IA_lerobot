@@ -63,9 +63,41 @@ Rien n'a encore été enregistré. Datasets prévus : `Bixymax/so101_masque_echa
 - Protocole TCP avec P-Robo : `docs/protocole_tcp.md`, pas encore validé par P-Robo.
 - `docs/` contient des captures non référencées (noms avec espaces) : les renommer ou les supprimer.
 
+## Nouveau depuis la séance du 2026-11-09 (travail à la maison, à valider au local)
+
+Pourquoi : la forme (rond / hexagone) et le verdict bon / défectueux décident de l'étiquette des
+épisodes. Une erreur du logiciel = une mauvaise étiquette apprise par le modèle.
+
+- **Forme au contour renforcée** (`conformite.py`) : régularité radiale + harmoniques 3, 5, 6 du profil
+  du contour ; planchers de dispersion abaissés (0,03 rendait les 18 pièces jaunes de la dernière séance
+  toutes ambiguës). **Non validé sur de vraies images** : seulement images synthétiques et 18 mesures.
+- **Pièces « incertaines »** (`?`) : forme ambiguë / inconnue ou contrôle à moins de 25 % de sa limite.
+  Le flux ne les choisit jamais (`selection.py`).
+- **Mode manuel** (`flux_masque.py`) : `l` liste les pièces, un numéro montre cette pièce sans aucun
+  jugement du logiciel.
+- **`scripts/bilan_formes.py`** : matrice de confusion forme et bon/défectueux à partir de
+  `fonds/mesures_v2.csv` (colonnes `vraie_forme` et `vraie_etat` à remplir à la main).
+
+## Plan de la séance (ordre)
+
+1. Checklist A-E comme avant (lumière : stores fermés, éclairage artificiel seul).
+2. **Pièces étalon prêtes** (voir A) : forme + état connus, numérotées.
+3. F : `rm fonds/references.json`, `apprendre` ×4 (10-15 positions, zone rouge) : OBLIGATOIRE, l'ancien
+   fichier n'a pas les nouvelles mesures de forme.
+4. F : passer chaque pièce étalon dans `verifier`, `c`, remplir le csv, `python scripts/bilan_formes.py`.
+   **Décision à prendre selon le résultat** : (a) 0 erreur -> flux automatique ; (b) confusion
+   rond/hexagone -> rapprocher `top` puis recommencer ; (c) pas réglable -> mode manuel en G.
+5. **Rapporter le csv** (ou la sortie de `bilan_formes.py`) à Claude : calibrer les seuils d'ambiguïté
+   (`AMBIGUITE_MIN`, `ZONE_INCERTAINE`, planchers `SIGMA_VECTEUR_MIN`) sur les vraies erreurs.
+6. G : essai de 3 épisodes sans push, puis série.
+
+## Pas encore fait
+- Journal par épisode (n° de pièce choisie, verdict du logiciel) pour filtrer a posteriori : proposé,
+  pas accepté.
+- Si le dataset est étiqueté par le logiciel, les erreurs d'étiquette y entrent : le bilan de l'étape 4
+  dit si c'est tolérable.
+
 ## À commiter
-Tout le travail de la séance est **modifié mais non commité** :
-`calibration.py`, `conformite.py`, `flux_masque.py`, `masquage.py`, `selection.py`,
-`tests/test_conformite.py`, `fonds/points_table.json`, `docs/*.md`, les captures de `docs/` et du
-dossier racine. `fonds/` propre à l'installation (fonds, références, réglages, calibration) n'est
-pas versionné, hormis `points_table.json`.
+Modifié mais non commité : `conformite.py`, `selection.py`, `flux_masque.py`, `tests/test_conformite.py`,
+`docs/*.md`, `scripts/bilan_formes.py`. `fonds/` n'est pas versionné, hormis `points_table.json`.
+Les captures non suivies de `docs/` et de la racine sont à renommer ou supprimer.

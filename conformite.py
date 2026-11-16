@@ -53,7 +53,25 @@ TEINTES_COULEURS = [("rouge", 0, 10), ("rouge", 165, 179), ("orange", 11, 22),
 # Valeurs mesurées sur vos photos (pièces de ~28 px) ; remplacées par vos mesures après `apprendre`.
 PROTOTYPES_FORME = {"etoile": (0.82, 0.64), "triangle": (0.95, 0.53),
                     "hexagone": (0.97, 0.80), "rond": (0.98, 0.90)}
-SIGMA_FORME_MIN = 0.03
+SIGMA_FORME_MIN = 0.012   # mesuré : remplissage d'une même pièce, écart-type ~0,007 (0,03 rendait tout ambigu)
+# Vecteur de forme complet : solidité, remplissage, régularité radiale, harmoniques 3, 5 et 6 du
+# profil radial (3 = triangle, 5 = étoile, 6 = hexagone). Prototypes issus d'images synthétiques
+# (pièces de 28 px, flou et bruit) : ils servent seulement tant que la forme n'est pas apprise.
+PROTOTYPES_VECTEUR = {"triangle": (0.95, 0.45, 0.52, 0.29, 0.00, 0.11),
+                      "rond": (0.98, 0.90, 0.97, 0.00, 0.00, 0.00),
+                      "hexagone": (0.97, 0.82, 0.87, 0.00, 0.00, 0.06),
+                      "etoile": (0.80, 0.50, 0.50, 0.00, 0.33, 0.00)}
+SIGMA_VECTEUR_MIN = np.array([0.015, 0.012, 0.015, 0.02, 0.02, 0.015])
+AMBIGUITE_MIN = 1.5     # écart (en écarts-types) exigé entre la meilleure forme et la deuxième
+ZONE_INCERTAINE = (0.8, 1.25)   # écart / tolérance : dans cette plage le verdict est « incertain »
+
+
+def vecteur_forme(m):
+    """Mesures de forme d'une pièce (6 valeurs ; 2 si la mesure est ancienne)."""
+    if "regularite" not in m:
+        return [m["solidite"], m["remplissage"]]
+    h = m["harmoniques"]
+    return [m["solidite"], m["remplissage"], m["regularite"], h[1], h[3], h[4]]
 
 TOLERANCES = {
     "taille_min_pct": 2.5,   # tolérance de taille minimale (± %), même si la mesure est très stable
@@ -151,6 +169,27 @@ def segmenter(piece, frame_bgr):
 
 
 
+def _profil_radial(contour, centre, n=72):
+    """Profil r(angle) du contour autour du centre de la pièce, ramené à son rayon moyen.
+    Renvoie (régularité, harmoniques) :
+      régularité  = rayon 5e centile / rayon 95e centile : rond ~1, hexagone ~0,87, triangle ~0,5
+      harmoniques = amplitude (relative) des harmoniques 2..6 : 3 = triangle, 5 = étoile à 5
+                    branches, 6 = hexagone ; une rotation de la pièce ne les change pas.
+    Insensible à la taille et à la rotation, et n'utilise que des rayons : bien plus net que
+    l'aire pour distinguer un hexagone d'un rond à 28 px."""
+    d = np.asarray(contour, float) - np.asarray(centre, float)
+    ang, r = np.arctan2(d[:, 1], d[:, 0]), np.hypot(d[:, 0], d[:, 1])
+    bins = ((ang + np.pi) / (2 * np.pi) * n).astype(int) % n
+    prof = np.array([r[bins == k].max() if np.any(bins == k) else np.nan for k in range(n)])
+    if np.isnan(prof).any():
+        ok = ~np.isnan(prof)
+        prof = np.interp(np.arange(n), np.arange(n)[ok], prof[ok], period=n)
+    prof = prof / max(prof.mean(), 1e-9)
+    spectre = np.abs(np.fft.rfft(prof)) / n * 2
+    return (float(np.percentile(prof, 5) / np.percentile(prof, 95)),
+            [float(v) for v in spectre[2:7]])
+
+
 def mesurer(piece, frame_bgr, camera, calib=None):
     """Mesure une pièce trouvée par Masqueur.pieces(). Renvoie None si elle est trop petite.
 
@@ -179,6 +218,7 @@ def mesurer(piece, frame_bgr, camera, calib=None):
     _, rayon = cv2.minEnclosingCircle(poly)
     solidite = a_poly / max(cv2.contourArea(cv2.convexHull(poly)), 1e-6)
     remplissage = a_poly / max(np.pi * rayon ** 2, 1e-6)
+    regularite, harmoniques = _profil_radial(contour_t, centre)
     # Couleur mesurée à l'intérieur de la pièce (le bord est mélangé avec la table)
     interieur = cv2.erode(plein, np.ones((3, 3), np.uint8))
     if interieur.sum() < 10:
@@ -193,6 +233,7 @@ def mesurer(piece, frame_bgr, camera, calib=None):
             "x": float(centre[0]), "y": float(centre[1]),
             "aire": aire, "diametre": float(2 * np.sqrt(aire / np.pi)),
             "solidite": float(solidite), "remplissage": float(remplissage),
+            "regularite": regularite, "harmoniques": harmoniques,
             "lab": [float(L * 100 / 255), float(a - 128), float(b - 128)],
             "teinte": teinte, "couleur": couleur_par_teinte(teinte)}
 
@@ -245,7 +286,8 @@ class References:
                 raise ValueError(f"références en {self.unite}, mesure en {m['unite']} : refaire "
                                  f"l'apprentissage (supprimer {REFERENCES_FICHIER}) après calibration")
             self.echantillons.setdefault(forme, []).append(
-                {k: m[k] for k in ("x", "y", "diametre", "lab", "solidite", "remplissage")})
+                {k: m[k] for k in ("x", "y", "diametre", "lab", "solidite", "remplissage",
+                                   "regularite", "harmoniques") if k in m})
         self._cache.pop(forme, None)
 
     def retirer(self, forme, n):
@@ -267,7 +309,9 @@ class References:
         y = np.array([e["y"] for e in ech])
         d = np.array([e["diametre"] for e in ech])
         lab = np.array([e["lab"] for e in ech])
-        f = np.array([[e["solidite"], e["remplissage"]] for e in ech])
+        complet = all("regularite" in e for e in ech)
+        f = np.array([vecteur_forme(e) if complet else [e["solidite"], e["remplissage"]]
+                      for e in ech])
         centre_xy = (x.mean(), y.mean())
         degre = 2 if len(ech) >= 15 else 1 if len(ech) >= 6 else 0
         X = _base_taille((x - centre_xy[0]) / 100, (y - centre_xy[1]) / 100, degre)
@@ -281,7 +325,8 @@ class References:
                "sigma_taille": max(sigma_d, 0.05), "borne_taille": (d.min(), d.max()),
                "lab": lab_ref, "sigma_couleur": sigma_c, "sigma_ab": sigma_ab,
                "zone_apprise": (float(x.min()), float(x.max()), float(y.min()), float(y.max())),
-               "forme_mu": f.mean(axis=0), "forme_sigma": np.maximum(f.std(axis=0), SIGMA_FORME_MIN)}
+               "forme_mu": f.mean(axis=0), "forme_sigma": np.maximum(f.std(axis=0), SIGMA_VECTEUR_MIN[:f.shape[1]]
+                                          if complet else SIGMA_FORME_MIN)}
         self._cache[forme] = mod
         return mod
 
@@ -308,21 +353,30 @@ class References:
 # --------------------------------------------------------------------------- #
 # Verdict
 # --------------------------------------------------------------------------- #
-def classer_forme(mesure, refs=None):
-    """Forme la plus proche en (solidité, remplissage). Renvoie (forme ou None, distance)."""
-    f = np.array([mesure["solidite"], mesure["remplissage"]])
-    meilleure, dmin = None, np.inf
+def distances_forme(mesure, refs=None):
+    """Distance (en écarts-types, moyenne quadratique) de la mesure à chaque forme."""
+    f = np.array(vecteur_forme(mesure), float)
+    res = {}
     for forme in FORMES:
         mod = refs.modele(forme) if refs is not None else None
-        if mod is not None:
+        if mod is not None and len(mod["forme_mu"]) == len(f):
             mu, sigma = mod["forme_mu"], mod["forme_sigma"]
+        elif len(f) == 6:
+            mu, sigma = np.array(PROTOTYPES_VECTEUR[forme]), SIGMA_VECTEUR_MIN * 2.5
         else:
             mu, sigma = np.array(PROTOTYPES_FORME[forme]), np.full(2, 0.04)
-        d = float(np.sqrt(np.mean(((f - mu) / sigma) ** 2)))
-        if d < dmin:
-            meilleure, dmin = forme, d
+            f = f[:2]
+        res[forme] = float(np.sqrt(np.mean(((f[:len(mu)] - mu) / sigma) ** 2)))
+    return res
+
+
+def classer_forme(mesure, refs=None):
+    """Forme la plus proche (contour : solidité, remplissage, profil radial).
+    Renvoie (forme ou None, distance)."""
+    d = distances_forme(mesure, refs)
+    meilleure = min(d, key=d.get)
     limite = (refs.tolerances if refs is not None else TOLERANCES)["forme_max"]
-    return (meilleure if dmin <= limite else None), dmin
+    return (meilleure if d[meilleure] <= limite else None), d[meilleure]
 
 
 def juger(mesure, refs=None):
@@ -333,12 +387,15 @@ def juger(mesure, refs=None):
     refs = refs if refs is not None else References()
     tol = refs.tolerances
     forme, dist_forme = classer_forme(mesure, refs)
-    v = {"forme": forme or "inconnue", "couleur": mesure["couleur"], "conforme": False,
+    dists = sorted(distances_forme(mesure, refs).values())
+    ambigue = len(dists) > 1 and (dists[1] - dists[0]) < AMBIGUITE_MIN
+    v = {"forme_ambigue": bool(ambigue), "incertain": False, "marge": None, "forme": forme or "inconnue", "couleur": mesure["couleur"], "conforme": False,
          "raisons": [], "remarques": [], "distance_forme": dist_forme,
          "ecart_taille_pct": None, "tol_taille_pct": None, "ecart_couleur": None, "tol_couleur": None,
          "ecart_teinte": None, "tol_teinte": None}
     if forme is None:
         v["raisons"].append("forme inconnue")
+        v["incertain"] = True          # taches collées, pièce cachée... : pas un vrai défaut
         return v
     mod = refs.modele(forme)
     # --- couleur
@@ -378,6 +435,16 @@ def juger(mesure, refs=None):
         v["remarques"].append(f"taille non vérifiée (références en {refs.unite}, mesure en "
                               f"{mesure['unite']})")
     v["conforme"] = not v["raisons"]
+    # Incertain : forme ambiguë, ou un contrôle (taille, teinte, couleur) à moins de 25 % de sa
+    # limite, d'un côté ou de l'autre. On n'enregistre pas ces pièces (voir selection.py) : mieux
+    # vaut les écarter que de risquer une mauvaise étiquette.
+    rapports = [r for r in (
+        abs(v["ecart_taille_pct"]) / v["tol_taille_pct"] if v["ecart_taille_pct"] is not None else None,
+        v["ecart_teinte"] / v["tol_teinte"] if v["ecart_teinte"] is not None else None,
+        v["ecart_couleur"] / v["tol_couleur"] if v["ecart_couleur"] is not None else None) if r is not None]
+    v["marge"] = max(rapports) if rapports else None
+    v["incertain"] = bool(ambigue or (v["marge"] is not None
+                                      and ZONE_INCERTAINE[0] < v["marge"] < ZONE_INCERTAINE[1]))
     return v
 
 
@@ -567,7 +634,7 @@ def commande_verifier(args):
     if manquantes:
         print(f"[ATTENTION] formes non apprises (taille non vérifiée) : {', '.join(manquantes)}")
     historique = []    # [(x, y, [diamètres])] : dispersion de la mesure par pièce
-    csv_f = Path(args.fonds) / "mesures.csv"
+    csv_f = Path(args.fonds) / "mesures_v2.csv"
     print("Vert = OK, rouge = défaut (raison affichée). c = enregistrer les mesures dans "
           f"{csv_f}, q = quitter.")
     try:
@@ -622,7 +689,8 @@ def commande_verifier(args):
                         w.writerow(["horodatage", "forme", "couleur", "conforme", "raisons", "x", "y",
                                     "diametre", "unite", "ecart_taille_pct", "ecart_couleur",
                                     "solidite", "remplissage", "ecart_teinte", "L", "a", "b",
-                                    "distance_forme"])
+                                    "distance_forme", "regularite", "h3", "h5", "h6",
+                                    "forme_ambigue", "incertain", "marge", "vraie_forme", "vraie_etat"])
                     for _, m, v in res:
                         w.writerow([time.strftime("%Y-%m-%d %H:%M:%S"), v["forme"], m["couleur"],
                                     v["conforme"], " ; ".join(v["raisons"]), f"{m['x']:.1f}",
@@ -632,7 +700,10 @@ def commande_verifier(args):
                                     f"{m['solidite']:.3f}", f"{m['remplissage']:.3f}",
                                     "" if v["ecart_teinte"] is None else f"{v['ecart_teinte']:.2f}",
                                     f"{m['lab'][0]:.1f}", f"{m['lab'][1]:.1f}", f"{m['lab'][2]:.1f}",
-                                    f"{v['distance_forme']:.2f}"])
+                                    f"{v['distance_forme']:.2f}", f"{m['regularite']:.3f}",
+                                    f"{m['harmoniques'][1]:.3f}", f"{m['harmoniques'][3]:.3f}",
+                                    f"{m['harmoniques'][4]:.3f}", v["forme_ambigue"], v["incertain"],
+                                    "" if v["marge"] is None else f"{v['marge']:.2f}", "", ""])
                 print(f"  {len(res)} mesure(s) ajoutée(s) à {csv_f}")
             elif t == ord("q"):
                 break

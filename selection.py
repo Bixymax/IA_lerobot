@@ -10,6 +10,8 @@ deux pièces de même couleur ne sont donc plus confondues.
 Modes :
   "triangle", "rond", "hexagone", "etoile" : une pièce CONFORME de cette forme (-> zone d'échange)
   "defaut"                                 : une pièce DÉFECTUEUSE, n'importe laquelle (-> poubelle)
+  "manuel"                                 : la pièce désignée PAR L'OPÉRATEUR (son numéro, voir
+                                             liste()), sans aucun jugement de forme ni de conformité
   None                                     : aucune, toutes les pièces sont effacées
 
 Verrouillage : une fois la cible choisie, elle ne change plus jusqu'au prochain definir() ou
@@ -26,7 +28,7 @@ import numpy as np
 from masquage import SEUIL_DIFF
 from conformite import analyser, couleur_par_teinte, juger, mediane_mesures
 
-MODES = ("triangle", "rond", "hexagone", "etoile", "defaut")
+MODES = ("triangle", "rond", "hexagone", "etoile", "defaut", "manuel")
 
 
 def _distance_boite(p, boite):
@@ -85,6 +87,31 @@ class Selection:
         """Même mode, nouvelle cible (après avoir replacé les pièces)."""
         with self.verrou:
             self._liberer()
+
+    def choisir_piece(self, pid):
+        """Mode manuel : la pièce n° `pid` devient la cible, quel que soit le verdict du logiciel.
+        Renvoie un message (succès ou raison de l'échec)."""
+        with self.verrou:
+            piste = self._piste(pid)
+            if piste is None or piste["rates"] > 0:
+                return f"pièce #{pid} introuvable (touche l pour la liste)"
+            self.mode = "manuel"
+            self.cible_id = pid
+            self.verrouille = True
+            for p in self.pistes:
+                p["connue"] = True
+            v = piste["verdict"]
+            return (f"cible MANUELLE : #{pid} en ({piste['x']:.0f}, {piste['y']:.0f}) {self._unite()} "
+                    f"[le logiciel y voit : {v['forme']} {v['couleur']}, "
+                    f"{'OK' if v['conforme'] else 'défaut : ' + '; '.join(v['raisons'])}]")
+
+    def liste(self):
+        """Pièces visibles, pour que l'opérateur choisisse un numéro."""
+        with self.verrou:
+            return [f"#{p['id']} en ({p['x']:.0f}, {p['y']:.0f}) {self._unite()} : "
+                    f"{p['verdict']['forme']} {p['verdict']['couleur']}"
+                    + (" <- CIBLE" if p["id"] == self.cible_id else "")
+                    for p in self.pistes if p["rates"] == 0]
 
     def _liberer(self):
         self.cible_id = None
@@ -211,6 +238,8 @@ class Selection:
 
     def _correspond(self, p):
         v = p["verdict"]
+        if self.mode == "manuel":
+            return False          # jamais de choix automatique : l'opérateur désigne la pièce
         if self.mode == "defaut":
             return not v["conforme"]
         return v["conforme"] and v["forme"] == self.mode
@@ -220,6 +249,7 @@ class Selection:
         candidats = [p for p in self.pistes
                      if p["rates"] == 0 and len(p["mesures"]) >= self.stable
                      and p["vue_immobile"] >= self.stable and self._correspond(p)
+                     and not p["verdict"].get("incertain")
                      and (not zone_ok or self.calib.dans_zone((p["x"], p["y"])))]
         if not candidats:
             return
@@ -256,7 +286,7 @@ class Selection:
 
     def _texte(self, p):
         v = p["verdict"]
-        t = f"#{p['id']} {v['forme']} {'OK' if v['conforme'] else 'DEF'}"
+        t = f"#{p['id']} {v['forme']} {'OK' if v['conforme'] else 'DEF'}{' ?' if v.get('incertain') else ''}"
         if v.get("ecart_taille_pct") is not None:
             t += f" {v['ecart_taille_pct']:+.1f}%"
         return t

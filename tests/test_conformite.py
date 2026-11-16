@@ -384,3 +384,34 @@ def test_flux_avec_selection(refs):
         out_top = flux.traiter("top", img)
     assert _ecart(out_top, img, (395, 275, 445, 325)) == 0.0      # le défaut est montré
     assert _ecart(out_top, vide, (120, 120, 180, 180)) == 0.0     # le triangle OK est effacé
+
+
+def test_selection_manuelle_ignore_le_verdict(refs):
+    """L'opérateur désigne le petit triangle (jugé défectueux) : lui seul reste visible."""
+    sel = _selection(refs, "manuel")
+    img = _scene(SCENE)
+    for _ in range(4):
+        sel.consigne("top", img)
+    assert sel.cible_id is None                       # jamais de choix automatique
+    petit = next(p for p in sel.pistes if p["verdict"]["forme"] == "triangle" and not p["verdict"]["conforme"])
+    assert "introuvable" in sel.choisir_piece(999)
+    assert "MANUELLE" in sel.choisir_piece(petit["id"])
+    c = sel.consigne("top", img)
+    assert c["cible"] == petit["boite"]
+    assert len(c["effacer"]) == 2
+
+
+def test_verdict_incertain_pres_de_la_tolerance(refs):
+    """Une pièce à la limite de la tolérance de taille est « incertaine » : jamais choisie."""
+    m = _mesures(_scene([("triangle", "rouge", 320, 240, R, 0.3)]))[0]
+    sur = C.juger(m, refs)
+    assert sur["conforme"] and not sur["incertain"]
+    ref = refs.taille_attendue("triangle", m["x"], m["y"])
+    tol = sur["tol_taille_pct"]
+    for facteur, incertain in ((0.5, False), (0.95, True), (1.1, True), (1.6, False)):
+        m2 = {**m, "diametre": ref * (1 + facteur * tol / 100)}
+        assert C.juger(m2, refs)["incertain"] is incertain, facteur
+    # une forme inconnue n'est pas un vrai défaut : incertaine aussi
+    m3 = {**m, "solidite": 0.3, "remplissage": 0.1, "regularite": 0.2, "harmoniques": [0.5] * 5}
+    v3 = C.juger(m3, refs)
+    assert v3["forme"] == "inconnue" and v3["incertain"]
