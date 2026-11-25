@@ -1,5 +1,4 @@
-"""Tests du protocole d'échange (sockets locales, sans matériel) :  python -m pytest -q"""
-import json
+"""Tests du dialogue avec le Stäubli (sockets locales, sans matériel) :  python -m pytest -q"""
 import socket
 import sys
 import time
@@ -8,92 +7,255 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from echange_tcp import ServeurEchange  # noqa: E402
+import echange_tcp as E  # noqa: E402
 
 
-class Client:
-    def __init__(self, port):
-        self.s = socket.create_connection(("127.0.0.1", port), timeout=2)
-        self.f = self.s.makefile("rwb")
-        self.n = 0
-
-    def envoyer(self, **msg):
-        self.n += 1
-        self.f.write((json.dumps({"v": 1, "id": self.n, **msg}) + "\n").encode())
-        self.f.flush()
-
-    def lire(self):
-        return json.loads(self.f.readline())
-
-    def appel(self, **msg):
-        self.envoyer(**msg)
-        return self.lire()
+# --------------------------------------------------------------------------- #
+# Trames
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("texte, attendu", [
+    ("GET-Query,Etoile", ("GET-Query", "Etoile")),
+    ("ACK-Done,Cercle", ("ACK-Done", "Cercle")),
+    ("ACK-NotDone,Hexagone", ("ACK-NotDone", "Hexagone")),
+])
+def test_trames_valides(texte, attendu):
+    assert E.decoder(texte) == attendu
 
 
+@pytest.mark.parametrize("texte", [
+    "", "Bonjour", "GET-Query", "GET-Query,", "GET-Query,etoile", "GET-Query,Étoile",
+    "GET-Query,Rond", "GET-Query,Etoile,3", "get-query,Etoile", "ACK-End",
+    "GET-Respond,Etoile,NONE", "GET-Query, Etoile",
+])
+def test_trames_douteuses_refusees(texte):
+    with pytest.raises(E.TrameInvalide):
+        E.decoder(texte)
+
+
+def test_format_des_nombres():
+    assert E.nombre(130.5) == "130.5" and E.nombre(30) == "30.0"
+    assert E.nombre(-0.04) == "0.0" and E.nombre(-12.35001) == "-12.4"
+    for v in (float("nan"), float("inf")):
+        with pytest.raises(ValueError):
+            E.nombre(v)
+
+
+def test_decoupage_des_paquets():
+    d = E.Decoupeur()
+    assert d.ajouter(b"GET-Qu") == []
+    assert d.ajouter(b"ery,Etoile@ACK-Done,Eto") == ["GET-Query,Etoile"]
+    assert d.ajouter(b"ile@\r\n") == ["ACK-Done,Etoile"]
+    assert d.ajouter(b"GET-Query,Cercle@\n") == ["GET-Query,Cercle"]      # le \n précédent est ôté
+    trop = d.ajouter(b"x" * 500)
+    assert len(trop) == 1 and "trop longue" in trop[0] and d.tampon == b""
+
+
+# --------------------------------------------------------------------------- #
+# Déroulement
+# --------------------------------------------------------------------------- #
+class Robot:
+    """Connexion factice : mémorise ce que la vision envoie."""
+
+    def __init__(self, echange):
+        self.echange, self.recu, self.panne = echange, [], False
+        self.jeton = echange.connexion(self._emettre)
+
+    def _emettre(self, octets):
+        if not self.panne:
+            self.recu.append(octets.decode())
+        return not self.panne
+
+    def dit(self, texte):
+        self.echange.recevoir(self.jeton, texte)
+
+    def coupe(self):
+        self.echange.deconnexion(self.jeton)
+
+
+def libre():
+    e = E.Echange(confirmer_au_demarrage=False)
+    return e, Robot(e)
+
+
+def etat(e):
+    return e.photo()["etat"]
+
+
+def test_cycle_normal_t1_t2_du_cahier_des_charges():
+    e, r = libre()
+    r.dit("GET-Query,Etoile")
+    p = e.photo()
+    assert p["etat"] == E.PREPARATION and p["mouvement_autorise"] and r.recu == []
+    assert e.envoyer_coordonnees(p["numero"], 130.5, 46.2, 30)
+    assert r.recu == ["GET-Respond,Etoile,130.5,46.2,30.0@"]
+    assert etat(e) == E.STAUBLI and not e.photo()["mouvement_autorise"]
+    r.dit("ACK-Done,Etoile")
+    assert r.recu[-1] == "ACK-End@" and etat(e) == E.LIBRE
+
+
+def test_none_ne_donne_pas_la_zone_et_tolere_un_ack():
+    e, r = libre()
+    r.dit("GET-Query,Cercle")
+    assert e.envoyer_none(e.numero)
+    assert r.recu == ["GET-Respond,Cercle,NONE@"] and etat(e) == E.LIBRE
+    r.dit("ACK-NotDone,Triangle")                 # autre forme : ignoré
+    assert len(r.recu) == 1
+    r.dit("ACK-NotDone,Cercle")
+    assert r.recu[-1] == "ACK-End@" and etat(e) == E.LIBRE
+
+
+def test_au_demarrage_rien_sans_l_operateur():
+    e = E.Echange()
+    r = Robot(e)
+    r.dit("GET-Query,Etoile")
+    assert etat(e) == E.BLOQUE and not e.photo()["mouvement_autorise"]
+    assert not e.envoyer_coordonnees(e.numero, 1, 2, 3) and r.recu == []
+    assert e.confirmer_zone_libre()
+    assert etat(e) == E.PREPARATION and e.photo()["forme"] == "Etoile"
+    assert not e.confirmer_zone_libre()
+
+
+def test_ack_apres_redemarrage_confirme_par_l_operateur():
+    e = E.Echange()
+    r = Robot(e)
+    r.dit("ACK-Done,Etoile")
+    assert r.recu == []
+    e.confirmer_zone_libre()
+    assert r.recu == ["ACK-End@"] and etat(e) == E.LIBRE
+
+
+def test_coordonnees_perimees_refusees():
+    e, r = libre()
+    r.dit("GET-Query,Etoile")
+    ancien = e.numero
+    r.dit("GET-Query,Cercle")                     # remplacée
+    assert not e.envoyer_coordonnees(ancien, 1, 2, 3) and not e.envoyer_none(ancien)
+    assert r.recu == [] and e.envoyer_coordonnees(e.numero, 1, 2, 0)
+    assert not e.envoyer_coordonnees(e.numero, 1, 2, 0)            # jamais deux fois
+    assert len(r.recu) == 1
+
+
+def test_trame_invalide_ne_change_rien():
+    e, r = libre()
+    r.dit("GET-Query,Etoile")
+    e.envoyer_coordonnees(e.numero, 1, 2, 3)
+    r.dit("Bonjour")
+    assert etat(e) == E.STAUBLI and len(r.recu) == 1
+
+
+@pytest.mark.parametrize("message", ["ACK-Done,Cercle", "GET-Query,Cercle"])
+def test_incoherence_pendant_la_zone_bloque(message):
+    e, r = libre()
+    r.dit("GET-Query,Etoile")
+    e.envoyer_coordonnees(e.numero, 1, 2, 3)
+    r.dit(message)
+    assert etat(e) == E.BLOQUE and len(r.recu) == 1
+    e.confirmer_zone_libre()
+    if message.startswith("ACK"):
+        assert r.recu[-1] == "ACK-End@" and etat(e) == E.LIBRE
+    else:
+        assert etat(e) == E.PREPARATION and e.photo()["forme"] == "Cercle"
+
+
+def test_liaison_perdue_pendant_la_zone():
+    e, r = libre()
+    r.dit("GET-Query,Etoile")
+    e.envoyer_coordonnees(e.numero, 1, 2, 3)
+    r.coupe()
+    assert etat(e) == E.BLOQUE
+    r2 = Robot(e)                                 # la reconnexion seule ne débloque rien
+    assert etat(e) == E.BLOQUE
+    e.confirmer_zone_libre()
+    r2.dit("ACK-Done,Etoile")                     # l'ACK arrive après le déblocage
+    assert r2.recu == ["ACK-End@"] and etat(e) == E.LIBRE
+
+
+def test_liaison_perdue_pendant_la_preparation_annule():
+    e, r = libre()
+    r.dit("GET-Query,Etoile")
+    numero = e.numero
+    r.coupe()
+    assert etat(e) == E.LIBRE
+    r2 = Robot(e)
+    assert not e.envoyer_coordonnees(numero, 1, 2, 3) and r2.recu == []
+    r.dit("GET-Query,Etoile")                     # ancienne connexion : ignorée
+    assert etat(e) == E.LIBRE
+
+
+def test_envoi_incertain_bloque():
+    e, r = libre()
+    r.dit("GET-Query,Etoile")
+    r.panne = True
+    assert not e.envoyer_coordonnees(e.numero, 1, 2, 3)
+    assert etat(e) == E.BLOQUE
+
+
+def test_prises_ratees_comptees_et_signalees():
+    e, r = libre()
+    for _ in range(E.ESSAIS_MAX):
+        r.dit("GET-Query,Etoile")
+        e.envoyer_coordonnees(e.numero, 1, 2, 3)
+        r.dit("ACK-NotDone,Etoile")
+    e.lire_evenements()
+    r.dit("GET-Query,Etoile")
+    assert any("ALERTE" in ligne for ligne in e.lire_evenements())
+    e.envoyer_coordonnees(e.numero, 1, 2, 3)
+    r.dit("ACK-Done,Etoile")
+    assert e.echecs["Etoile"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# Réseau
+# --------------------------------------------------------------------------- #
 @pytest.fixture
 def srv():
-    s = ServeurEchange("127.0.0.1", 0).demarrer()
+    s = E.ServeurEchange("127.0.0.1", 0, E.Echange(confirmer_au_demarrage=False)).demarrer()
     yield s
-    s.shutdown()
-    s.server_close()
+    s.arreter()
 
 
-def connecte(srv):
-    c = Client(srv.server_address[1])
-    assert c.appel(type="HELLO", role="probo")["type"] == "HELLO_ACK"
-    return c
+def attendre(condition, duree=3.0):
+    fin = time.monotonic() + duree
+    while not condition():
+        assert time.monotonic() < fin, "délai dépassé"
+        time.sleep(0.01)
 
 
-def test_hello_obligatoire_et_version(srv):
-    c = Client(srv.server_address[1])
-    assert c.appel(type="PING")["code"] == "NO_HELLO"
-    assert c.appel(type="HELLO", role="probo", **{"v": 1})["type"] == "HELLO_ACK"
-    assert c.appel(type="PING")["type"] == "PONG"
+def client(srv):
+    return socket.create_connection(("127.0.0.1", srv.server_address[1]), timeout=3)
 
 
-def test_verrou_exclusif(srv):
-    c = connecte(srv)
-    assert c.appel(type="LOCK_REQUEST")["type"] == "LOCK_GRANTED"
-    assert not srv.zone.prendre_pia(timeout=0)          # P-IA ne peut pas entrer
-    assert c.appel(type="LOCK_RELEASE")["type"] == "LOCK_RELEASED"
-    assert srv.zone.prendre_pia(timeout=0)
-    r = c.appel(type="LOCK_REQUEST")
-    assert r["type"] == "LOCK_DENIED" and r["holder"] == "pia"
+def lire(s):
+    recu = b""
+    while not recu.endswith(b"@"):
+        morceau = s.recv(100)
+        assert morceau, "liaison fermée"
+        recu += morceau
+    return recu
 
 
-def test_depot_pia_notifie_probo(srv):
-    c = connecte(srv)
-    assert srv.zone.prendre_pia()
-    assert c.appel(type="GET_ZONE")["stable"] is False
-    srv.zone.liberer_pia([{"id": 1, "forme": "etoile", "couleur": "vert", "x_mm": 12.0, "y_mm": 30.0}])
-    types = {c.lire()["type"], c.lire()["type"]}
-    assert types == {"ZONE_UPDATE", "LOCK_AVAILABLE"}
-    z = c.appel(type="GET_ZONE")
-    assert z["stable"] and z["pieces"][0]["forme"] == "etoile"
+def test_reseau_cycle_complet_sans_retour_a_la_ligne(srv):
+    with client(srv) as c:
+        c.sendall(b"GET-Query,Etoile@")
+        attendre(lambda: srv.echange.photo()["etat"] == E.PREPARATION)
+        srv.echange.envoyer_coordonnees(srv.echange.numero, 74, 105.04, 30)
+        assert lire(c) == b"GET-Respond,Etoile,74.0,105.0,30.0@"
+        c.sendall(b"ACK-Done,Etoile@")
+        assert lire(c) == b"ACK-End@"
+    attendre(lambda: not srv.echange.photo()["connecte"])
+    assert srv.echange.photo()["etat"] == E.LIBRE
 
 
-def test_piece_prise(srv):
-    c = connecte(srv)
-    srv.zone.pieces = [{"id": 7, "forme": "rond"}]
-    assert c.appel(type="PIECE_TAKEN", piece_id=7)["code"] == "NOT_HOLDER"
-    c.appel(type="LOCK_REQUEST")
-    assert c.appel(type="PIECE_TAKEN", piece_id=99)["code"] == "UNKNOWN_PIECE"
-    assert c.appel(type="PIECE_TAKEN", piece_id=7)["type"] == "TAKEN_ACK"
-    assert srv.zone.inventaire() == []
-
-
-def test_liaison_perdue_garde_le_verrou(srv):
-    c = connecte(srv)
-    c.appel(type="LOCK_REQUEST")
-    c.s.close()
-    time.sleep(0.3)
-    assert not srv.zone.prendre_pia(timeout=0)          # pas de reprise automatique
-    srv.zone.reinitialiser()                            # opérateur
-    assert srv.zone.prendre_pia(timeout=0)
-
-
-def test_json_invalide(srv):
-    c = connecte(srv)
-    c.f.write(b"pas du json\n")
-    c.f.flush()
-    assert c.lire()["code"] == "BAD_JSON"
+def test_reseau_nouvelle_connexion_remplace_l_ancienne(srv):
+    with client(srv) as c1:
+        c1.sendall(b"GET-Query,Etoile@")
+        attendre(lambda: srv.echange.photo()["etat"] == E.PREPARATION)
+        srv.echange.envoyer_coordonnees(srv.echange.numero, 1, 2, 3)
+        lire(c1)
+        with client(srv) as c2:
+            assert c1.recv(10) == b""                        # l'ancienne est fermée
+            assert srv.echange.photo()["etat"] == E.BLOQUE   # la zone était donnée
+            c2.sendall(b"ACK-Done,Etoile@")
+            time.sleep(0.2)
+            srv.echange.confirmer_zone_libre()
+            assert lire(c2) == b"ACK-End@"

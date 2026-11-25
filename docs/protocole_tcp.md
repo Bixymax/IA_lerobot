@@ -1,153 +1,118 @@
-# Protocole TCP/IP de la zone d'échange P-IA ↔ P-Robo
+# Protocole TCP/IP commun P-IA ↔ P-Robo (zone d'échange)
 
-**Statut : PROPOSITION (v1) à faire valider par P-Robo avant tout développement de la zone d'échange**
-(exigence du cahier des charges). Implémentation de référence côté P-IA : `echange_tcp.py`
-(testée dans `tests/test_echange_tcp.py`).
+**Statut : v2, à valider par les deux pôles.** Reprend le cahier des charges de P-Robo
+(`Cahier des charges — Communication TCP IP Robot ↔ Vision.pdf`, 27/09/2026) pour les messages, et
+précise ce qu'il laisse ouvert (§4, §5, §7). Remplace la proposition JSON précédente.
+Implémentation côté P-IA : `echange_tcp.py` (dialogue), `mesure_echange.py` (coordonnées),
+`cellule.py` (enchaînement).
 
-## 1. Objectifs
+## 1. Transport
 
-1. **Sécurité** : jamais les deux robots en même temps dans la zone d'échange (verrou).
-2. P-IA indique à P-Robo **quelles pièces conformes** sont disponibles et **où** (mm).
-3. Fonctionnement simple et robuste : si la liaison tombe, on choisit toujours le côté sûr.
+| Élément | Valeur |
+|---|---|
+| Rôles | PC P-IA = **serveur**, contrôleur Stäubli (port J205) = **client** |
+| Liaison | câble RJ45 direct, IP fixes **à convenir** |
+| Port | TCP **5000** |
+| Trames | texte ASCII, champs séparés par `,`, fin par `@` (code 64), **sans retour à la ligne** |
+| Nagle | désactivé des deux côtés |
+| Délai | le robot attend la réponse **sans limite de temps** |
+| Clients | un seul ; une nouvelle connexion ferme l'ancienne |
 
-## 2. Transport
+## 2. Messages
 
-- TCP, **P-IA = serveur** (port **5050**, modifiable), **P-Robo = client**. Un seul client P-Robo.
-- Messages **JSON, un par ligne** (UTF-8, terminés par `\n`). Lisible à la main (`nc <ip> 5050`).
-- Champs communs : `"v"` (version du protocole, **1**), `"type"`, `"id"` (entier croissant choisi par
-  l'émetteur d'une requête). La réponse reprend `"re": <id de la requête>`.
-- Messages **poussés** par P-IA (sans requête) : `ZONE_UPDATE`, `LOCK_AVAILABLE`.
-- **Heartbeat** : P-Robo envoie `PING` toutes les 2 s ; P-IA répond `PONG`. Sans réponse pendant 6 s,
-  P-Robo considère la liaison perdue (voir §5).
-- Adresses IP : à convenir (réseau du local, IP fixes recommandées).
+| Message | Sens | Format | Exemple |
+|---|---|---|---|
+| Demande | Robot → Vision | `GET-Query,Forme@` | `GET-Query,Etoile@` |
+| Pièce disponible | Vision → Robot | `GET-Respond,Forme,X,Y,RZ@` | `GET-Respond,Etoile,74.0,105.0,30.0@` |
+| Pas de pièce | Vision → Robot | `GET-Respond,Forme,NONE@` | `GET-Respond,Etoile,NONE@` |
+| Prise réussie | Robot → Vision | `ACK-Done,Forme@` | `ACK-Done,Etoile@` |
+| Prise ratée | Robot → Vision | `ACK-NotDone,Forme@` | `ACK-NotDone,Etoile@` |
+| Fin de cycle | Vision → Robot | `ACK-End@` | `ACK-End@` |
 
-## 3. Repère des coordonnées
+Formes, orthographe exacte : `Etoile`, `Cercle`, `Triangle`, `Hexagone`.
+`X`, `Y`, `RZ` : point décimal, une décimale. La hauteur n'est **pas** transmise : elle est
+constante et connue de P-Robo.
 
-- **Millimètres**, repère de la table défini par P-IA (`fonds/points_table.json`) : origine = coin
-  haut-gauche du rectangle repère, x vers la droite, y vers le robot P-IA.
-- **À convenir avec P-Robo** : la position de ce repère par rapport à leur robot (la calibration du
-  Stäubli vers ce repère est de leur ressort : le cahier des charges leur laisse l'étalonnage).
-  Proposition : on matérialise sur la nappe 2 à 3 repères communs que les deux équipes mesurent.
-- Orientation `theta_deg` : angle de la pièce dans ce repère, **optionnel** (`null` pour le rond).
+## 3. Cycle
 
-## 4. Messages
-
-### 4.1 Connexion
-
-| Sens | Message | Contenu |
-|---|---|---|
-| P-Robo → P-IA | `HELLO` | `{"type":"HELLO","v":1,"id":1,"role":"probo"}` |
-| P-IA → P-Robo | `HELLO_ACK` | `{"type":"HELLO_ACK","re":1,"zone":"FREE"}` (`zone` = `FREE`, `PIA` ou `PROBO`) |
-| P-Robo → P-IA | `PING` / `PONG` | heartbeat |
-
-Tout autre message avant `HELLO` est refusé (`ERROR`, code `NO_HELLO`). Version incompatible : `ERROR`
-code `VERSION`.
-
-### 4.2 Verrou de la zone
-
-P-IA arbitre. États : `FREE` (libre), `PIA` (P-IA y travaille), `PROBO` (P-Robo y travaille).
-
-| Sens | Message | Effet |
-|---|---|---|
-| P-Robo → P-IA | `LOCK_REQUEST` | demande d'entrer dans la zone |
-| P-IA → P-Robo | `LOCK_GRANTED` | verrou accordé : P-Robo peut entrer ; P-IA **n'entre pas** |
-| P-IA → P-Robo | `LOCK_DENIED` `{"holder":"pia"}` | refusé : P-IA est dans la zone. Attendre `LOCK_AVAILABLE` |
-| P-Robo → P-IA | `LOCK_RELEASE` | P-Robo est sorti, bras hors de la zone |
-| P-IA → P-Robo | `LOCK_RELEASED` | verrou libre |
-| P-IA → P-Robo | `LOCK_AVAILABLE` | **poussé** quand P-IA libère le verrou |
-
-Règles : pas de file d'attente ni de préemption (celui qui a le verrou le garde jusqu'à `RELEASE`) ;
-P-IA ne dépose **jamais** une pièce sans avoir le verrou ; P-Robo n'entre **jamais** sans `LOCK_GRANTED`.
-
-### 4.3 Inventaire de la zone
-
-| Sens | Message | Contenu |
-|---|---|---|
-| P-Robo → P-IA | `GET_ZONE` | demande l'état |
-| P-IA → P-Robo | `ZONE` | `{"stable":true,"holder":"FREE","pieces":[...]}` |
-| P-IA → P-Robo | `ZONE_UPDATE` | **poussé** après chaque dépôt (liste complète) |
-| P-Robo → P-IA | `PIECE_TAKEN` `{"piece_id":3}` | P-Robo a pris la pièce (verrou requis) |
-| P-IA → P-Robo | `TAKEN_ACK` | inventaire mis à jour |
-
-`stable:false` = P-IA est en train de déposer : les positions ne sont **pas** fiables, ne pas s'en servir.
-Les pièces ne sont lues par P-Robo qu'avec `stable:true`, de préférence **après** `LOCK_GRANTED`.
-
-Une pièce :
-
-```json
-{"id": 3, "forme": "triangle", "couleur": "rouge", "x_mm": 40.0, "y_mm": 25.0, "theta_deg": 30.0}
+```
+Stäubli                                   PC P-IA (SO-101)
+  │── GET-Query,Etoile@ ──────────────────▶│  le SO-101 dépose une étoile conforme,
+  │        (attente, sans limite)          │  revient au repos ; mesure par la caméra du dessus
+  │◀── GET-Respond,Etoile,X,Y,RZ@ ─────────│  ┐
+  │    prend la pièce                      │  │ zone au Stäubli : SO-101 immobile
+  │    SORT du plan de travail             │  │
+  │── ACK-Done,Etoile@ ───────────────────▶│  ┘
+  │◀── ACK-End@ ───────────────────────────│  le SO-101 peut retravailler
 ```
 
-`forme` ∈ `triangle | etoile | hexagone | rond`. Seules des pièces **conformes** se trouvent dans la
-zone d'échange (les défectueuses vont à la poubelle). `id` : numéro unique tant que la pièce est dans
-la zone.
+## 4. Repère `fEchange` et orientation (**à valider**)
 
-### 4.4 Erreurs
+- Zone d'échange : rectangle **bleu** de la nappe (148 × 210 mm, à mesurer).
+- **Origine** : coin **bas gauche** vu par la caméra du dessus (côté SO-101).
+- **X** vers la droite, **Y** vers le haut de l'image (s'éloigne du SO-101), **Z vers le plafond**
+  (repère direct). Millimètres.
+- Calibration commune : le robot apprend `fEchange` sur 3 points de la nappe : origine, coin bas
+  droit (sur X), coin haut gauche (côté Y positif).
+- **RZ** : degrés, **antihoraire** vu de dessus. `RZ = 0` : une **pointe** de la pièce vers +Y.
 
-`{"type":"ERROR","re":<id>,"code":"...","msg":"..."}` — codes : `NO_HELLO`, `VERSION`, `BAD_JSON`,
-`BAD_TYPE`, `NOT_HOLDER` (verrou requis / non détenu), `UNKNOWN_PIECE`.
+| Forme | Plage de RZ |
+|---|---|
+| Triangle | 0 à 120° |
+| Étoile | 0 à 72° |
+| Hexagone | 0 à 60° |
+| Cercle | toujours 0 |
 
-## 5. Défaillances : on choisit toujours le côté sûr
+La position envoyée est le **centre** de la pièce.
+
+## 5. Sécurité de la zone
+
+Règle : **message douteux = personne ne bouge.** Aucun message de verrou : la zone appartient au
+Stäubli entre l'envoi des coordonnées et son ACK.
+
+Exigences côté P-IA :
+
+- Coordonnées envoyées seulement après validation de l'opérateur, aucun programme LeRobot actif,
+  zone dégagée et mesures stables sur plusieurs images.
+- Jamais de message non demandé ni répété (il resterait dans le tampon du robot).
+
+Exigence côté P-Robo (**à confirmer**) :
+
+- `ACK-Done` / `ACK-NotDone` envoyés **seulement quand le bras est physiquement hors du plan de
+  travail P-IA** (pas seulement `bCOM_ZoneAutorisee = false`).
+
+Comportement du serveur P-IA dans les cas anormaux (« bloqué » = SO-101 immobile, aucune réponse
+jusqu'à ce que l'opérateur confirme que le Stäubli est hors de la zone, touche `o`) :
 
 | Situation | Comportement |
 |---|---|
-| Liaison perdue, **P-Robo détient** le verrou | Il le **garde** : P-IA n'entre pas. P-Robo se reconnecte (`HELLO`) puis `LOCK_RELEASE`, ou l'opérateur le remet à `FREE` après contrôle visuel (`reinitialiser()`). |
-| Liaison perdue, **P-IA détient** le verrou | P-IA termine son geste, ramène le bras au repos, ne libère **qu'à la reconnexion** de P-Robo. P-Robo, sans `PONG` depuis 6 s, **n'entre pas**. |
-| P-Robo plante après `LOCK_GRANTED` | Même cas : intervention opérateur. Aucun timeout automatique ne redonne la zone à P-IA. |
-| Arrêt d'urgence d'un robot | Hors protocole (câblage/sécurité de chaque cellule) ; le verrou reste dans son état. |
+| Démarrage du serveur | bloqué ; une demande reçue entre-temps est traitée après confirmation |
+| Trame inconnue, mal formée, forme mal écrite | ignorée et signalée, rien ne change |
+| Liaison perdue pendant la préparation | demande annulée |
+| Liaison perdue pendant que le Stäubli a la zone | bloqué ; la reconnexion seule ne débloque pas |
+| ACK d'une autre forme, ou nouvelle demande sans ACK | bloqué |
+| Envoi des coordonnées en échec | bloqué |
+| ACK sans zone donnée | ignoré, sauf après `NONE` ou après déblocage : réponse `ACK-End@` |
+| Nouvelle demande avant la réponse | la dernière forme demandée l'emporte |
 
-## 6. Déroulements types
+## 6. Essais
 
-**P-IA dépose une pièce**
+| Essai | Commandes P-IA | Remplace |
+|---|---|---|
+| Communication seule, coordonnées **fictives** (mouvement robot désactivé) | `python echange_tcp.py` puis `o`, `v 130.5 46.2 30`, `x` | Hercules (tests T1 à T4, T8, T9) |
+| Cellule complète sans le Stäubli | `python cellule.py …` et `python scripts/faux_staubli.py` | le robot |
+| Les deux cellules | `python cellule.py …` | |
 
-```
-P-IA                                P-Robo
- │ prend le verrou (interne) : FREE → PIA
- │ ... dépose la pièce, bras au repos ...
- │ libère : PIA → FREE
- │──── ZONE_UPDATE {pieces} ─────────▶│
- │──── LOCK_AVAILABLE ───────────────▶│
- │◀─── LOCK_REQUEST ──────────────────│
- │──── LOCK_GRANTED ─────────────────▶│  FREE → PROBO
- │◀─── GET_ZONE ──────────────────────│  (peut relire)
- │──── ZONE {stable:true,pieces} ────▶│
- │                                    │ va chercher la pièce (x_mm, y_mm)
- │◀─── PIECE_TAKEN {piece_id:3} ──────│
- │──── TAKEN_ACK ────────────────────▶│
- │◀─── LOCK_RELEASE ──────────────────│  PROBO → FREE
- │──── LOCK_RELEASED ────────────────▶│
-```
-
-**P-Robo veut entrer pendant un dépôt** : `LOCK_REQUEST` → `LOCK_DENIED {holder:"pia"}`, puis il attend
-`LOCK_AVAILABLE`.
+Les tests T5 à T7 (trames volontairement fausses) restent à faire avec Hercules.
 
 ## 7. Points à valider avec P-Robo
 
-1. Format JSON par lignes et port 5050 : OK ? (sinon : binaire, autre port.)
-2. **P-Robo veut-il aussi pousser une « demande de forme »** (ex. `REQUEST_PIECE {"forme":"etoile"}`) pour
-   que P-IA dépose une forme précise ? Le cahier des charges décrit un flux « P-IA trie et dépose » ;
-   `docs/architecture.md` suppose une demande P-Robo. À trancher : ce message est prévu en v1.1.
-3. Repère commun des coordonnées (§3) et précision attendue de la position (mm).
-4. Orientation des pièces (`theta_deg`) nécessaire pour leur pince ?
-5. Dimensions et limites de la zone d'échange ; nombre max de pièces simultanées (4 attendues : une de chaque forme ?).
-6. Délais : durée maximale d'un séjour de P-Robo dans la zone avant alerte opérateur (proposition : 60 s).
-7. Où se trouvent les IP et qui lance quoi à la démo.
-
-## 8. À faire côté P-IA
-
-- [x] Spécification et serveur de référence (`echange_tcp.py`), tests sur sockets locales.
-- [ ] Faire valider ce document par P-Robo (le modifier ensemble, puis fixer la version).
-- [ ] Étendre la calibration (`fonds/points_table.json`) pour que la zone d'échange soit dans le champ
-      de la caméra `top` : sinon P-IA ne peut pas mesurer l'inventaire, seulement le déduire de ses dépôts.
-- [ ] Brancher l'orchestrateur : `prendre_pia` avant chaque geste de dépôt, `liberer_pia(inventaire)` après.
-- [ ] Test d'intégration avec le vrai client P-Robo (ou `nc`) avant la démo.
-
-## 9. Essayer à la main
-
-```bash
-python echange_tcp.py --port 5050        # P-IA simulé ; touche d = dépose un triangle
-nc 127.0.0.1 5050
-{"type":"HELLO","v":1,"id":1,"role":"probo"}
-{"type":"LOCK_REQUEST","v":1,"id":2}
-{"type":"GET_ZONE","v":1,"id":3}
-```
+1. Le cahier des charges du 27/09 est-il la dernière version ?
+2. ACK envoyé seulement bras sorti (§5) ?
+3. Le Stäubli passe-t-il au-dessus du reste de la table (caméras, SO-101) ?
+4. Repère `fEchange` et convention RZ (§4) ; précision nécessaire en X, Y, RZ.
+5. IP et masque du port J205 ; IP à donner au PC P-IA.
+6. Épaisseur des pièces en mm (sert à P-IA pour corriger la position vue par la caméra).
+7. Après `NONE`, le robot envoie-t-il un ACK ou directement une nouvelle demande ?
+8. Peut-il envoyer un second `GET-Query` avant l'ACK ?
+9. Après `ACK-NotDone` : nouvelle mesure à la demande suivante, 3 essais au maximum ?

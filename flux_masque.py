@@ -237,6 +237,11 @@ class FluxMasque:
         with self.verrou:
             return self._brut
 
+    def image_brute(self, nom):
+        """(numéro, dernière image NON masquée) de la caméra, ou (0, None). Le numéro change à
+        chaque nouvelle lecture réussie : il distingue une image neuve d'une caméra figée."""
+        return self.etat[nom].get("brute", (0, None))
+
     # ---- traitement d'une image (testable sans matériel) -------------------
     def traiter(self, nom, frame):
         """Renvoie l'image à publier pour la caméra `nom`."""
@@ -323,6 +328,7 @@ class FluxMasque:
                 echecs = 0
                 if frame.shape[1] != LARGEUR or frame.shape[0] != HAUTEUR:
                     frame = cv2.resize(frame, (LARGEUR, HAUTEUR))
+                self.etat[nom]["brute"] = (self.image_brute(nom)[0] + 1, frame)
                 t0 = time.perf_counter()
                 image = self.traiter(nom, frame)
                 e = self.etat[nom]

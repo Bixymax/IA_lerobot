@@ -121,8 +121,8 @@ caméras virtuelles** (même bloc `--robot.cameras` que ci-dessus). Elle dépend
   `lerobot-record` y refuse les datasets `eval_...` et ne sert qu'à la collecte.
 - **Versions antérieures** : `lerobot-record ... --policy.path=<modèle> --dataset.repo_id=Bixymax/eval_...`.
 
-L'orchestrateur relié à P-Robo pourra choisir la forme par programme :
-`FluxMasque.choisir_forme("etoile")`.
+Avec le Stäubli de P-Robo, `cellule.py` remplace le terminal 1 : il choisit la forme demandée
+(`FluxMasque.choisir_forme`) et mesure la pièce déposée. Voir `docs/essai_cellule.md`.
 
 ## Règles à respecter
 

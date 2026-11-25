@@ -21,14 +21,17 @@ remplaçant par une photo de la table vide (le *fond*). Détails : `docs/archite
 | `conformite.py` | Forme, taille (mm) et couleur de chaque pièce, verdict OK / défaut ; apprentissage sur les pièces OK |
 | `selection.py` | Choix de la pièce montrée (conforme d'une forme, ou défectueuse), retrouvée sur les autres caméras |
 | `flux_masque.py` | Caméras virtuelles masquées pour LeRobot (`docs/flux_masque.md`) |
-| `echange_tcp.py` | Serveur du protocole TCP avec P-Robo, verrou de la zone d'échange (`docs/protocole_tcp.md`) |
+| `echange_tcp.py` | Serveur TCP pour le Stäubli de P-Robo : trames et sécurité de la zone d'échange (`docs/protocole_tcp.md`) |
+| `mesure_echange.py` | Position (mm) et orientation RZ de la pièce posée dans la zone d'échange |
+| `cellule.py` | Essai en deux étapes : demande, flux masqué, modèle lancé à la main, mesure, réponse (`docs/essai_cellule.md`) |
+| `scripts/rollout_echange.sh`, `scripts/faux_staubli.py` | Lancer le modèle « échange » ; jouer le rôle du robot |
 | `detection.py` | Démo : garder une forme visible, effacer les autres (ancien détecteur par couleur) |
 | `capture_dataset.py` | Constitution d'un jeu d'images étiquetées depuis la caméra du dessus |
 | `record_dataset.py`, `lerobot_recorder/` | Menu interactif d'enregistrement LeRobot (voir plus bas) |
 | `scripts/record_triangle.sh` | Commande `lerobot-record` du premier jeu de données |
 | `manuel.md` | Aide-mémoire des commandes LeRobot (calibration, téléopération, enregistrement, test d'un modèle) |
 | `tests/` | Tests sur images synthétiques et sockets locales (pas besoin de matériel) |
-| `docs/` | `architecture.md`, `conformite.md`, `flux_masque.md`, `protocole_tcp.md`, `checklist_enregistrement.md` |
+| `docs/` | `architecture.md`, `conformite.md`, `flux_masque.md`, `protocole_tcp.md`, `essai_cellule.md`, `checklist_enregistrement.md` |
 
 ## Installation (une seule fois par PC)
 
@@ -112,8 +115,9 @@ lerobot_recorder/  config.py (réglages) · commands.py (commandes lerobot-*, te
 
 ## Communication avec P-Robo
 
-Protocole TCP/JSON proposé dans `docs/protocole_tcp.md` (**à faire valider par P-Robo**). Essai à la main :
-`python echange_tcp.py --port 5050` puis `nc 127.0.0.1 5050`.
+Trames texte `GET-Query,Etoile@` définies par le cahier des charges de P-Robo, complétées dans
+`docs/protocole_tcp.md` (**à valider par les deux pôles**). Essai sans matériel :
+`python echange_tcp.py` dans un terminal, `python scripts/faux_staubli.py` dans un autre.
 
 ## Tests
 
@@ -127,12 +131,13 @@ python -m pytest -q
 - [x] Conformité : forme au contour, taille en mm et couleur comparées aux pièces OK apprises
 - [x] Correspondance entre caméras par homographie de la table
 - [x] Flux masqué : mode « pièce défectueuse » (modèle poubelle), cible verrouillée pendant l'épisode
-- [x] Protocole TCP : proposition + serveur de référence + tests (`docs/protocole_tcp.md`)
+- [x] Protocole TCP du Stäubli : serveur, coordonnées et orientation, essai en deux étapes (testés sans matériel)
 - [ ] **Au local** : mesurer le rectangle repère à la règle, définir `zone_alimentation`, apprendre
       les pièces OK (`references.json`) et mesurer la dispersion réelle avec les pièces défectueuses
-- [ ] Faire valider le protocole par P-Robo ; mettre la zone d'échange dans la calibration
+- [ ] Faire valider le protocole par P-Robo (§7 de `docs/protocole_tcp.md`)
+- [ ] **Au local** : essayer le modèle « échange » avec `cellule.py`, mesurer la précision X/Y/RZ
 - [ ] Nouveaux enregistrements avec plusieurs pièces, réglages caméra figés et flux masqué
 - [ ] Modèle « poubelle » (pièces défectueuses)
-- [ ] Orchestrateur : demandes, choix de la cible, verrou, nouvelles tentatives, boucle d'inférence avec masquage
+- [ ] Orchestrateur automatique : lancement du modèle par le programme, tri des défectueuses en temps libre
 - [ ] Documentation finale (structure, ordinogramme, justification des choix) et manuel d'intégration
       pour l'opérateur : livrables du cahier des charges, à déposer sur LEARN

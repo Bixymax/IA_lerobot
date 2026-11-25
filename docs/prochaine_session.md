@@ -1,5 +1,14 @@
 # Prochaine session au local robot : état et reprise
 
+## Travail à la maison du 2026-11-25 (communication avec le Stäubli, non essayé sur matériel)
+
+- Nouveau : `echange_tcp.py` réécrit selon le PDF de P-Robo, `mesure_echange.py`, `cellule.py`,
+  `scripts/rollout_echange.sh`, `scripts/faux_staubli.py`. Tests et essai avec caméras simulées OK.
+- **À faire au local** : suivre `docs/essai_cellule.md` (modèle « échange » avec le faux Stäubli,
+  précision X/Y/RZ à la règle, puis liaison RJ45).
+- **À envoyer à P-Robo** : `docs/protocole_tcp.md` (questions au §7).
+- Plus tard : dataset poubelle, puis lancement automatique du modèle.
+
 ## Séance du 2026-11-23 (résumé, le plus récent d'abord)
 
 **Fait**
@@ -163,7 +172,7 @@ Rien n'a encore été enregistré. Datasets prévus : `Bixymax/so101_masque_echa
   définitive ; à vérifier (ils laissent deviner la forme au modèle).
 - Proposés, jamais acceptés : mode « pièce quelconque » (touche `p`), option `--auto` de re-choix de
   cible, `recalage.py`. À reproposer.
-- Protocole TCP avec P-Robo : `docs/protocole_tcp.md`, pas encore validé par P-Robo.
+- Protocole TCP avec P-Robo : `docs/protocole_tcp.md` (v2 du 2026-11-25), pas encore validé.
 - `docs/` contient des captures non référencées (noms avec espaces) : les renommer ou les supprimer.
 
 ## Nouveau depuis la séance du 2026-11-09 (travail à la maison, à valider au local)

@@ -4,9 +4,11 @@
 
 1. P-Robo demande une forme (triangle, étoile, hexagone, rond) par TCP.
 2. On choisit une pièce **conforme** de cette forme dans la zone d'alimentation.
-3. Le bras la prend et la dépose dans la zone d'échange, après avoir pris le verrou de la zone.
-4. On renvoie à P-Robo la pièce disponible et ses coordonnées, puis on libère le verrou.
-5. Sans demande : les pièces défectueuses (taille, couleur, forme) vont à la zone de déchets.
+3. Le bras la prend, la dépose dans la zone d'échange et revient au repos.
+4. La caméra du dessus mesure la pièce ; on renvoie à P-Robo sa position et son orientation. La
+   zone est à lui jusqu'à son accusé de réception, le SO-101 reste immobile.
+5. Quand le robot de P-Robo n'a pas la zone : les pièces défectueuses (taille, couleur, forme)
+   vont à la zone de déchets.
 
 ## Briques
 
@@ -17,8 +19,21 @@
 | Vision – sélection | Cible choisie sur `top`, verrouillée, retrouvée sur les autres caméras | Fait (`selection.py`) |
 | Vision – masquage | Efface les pièces non ciblées dans les images du modèle | Fait (`masquage.py`) |
 | Modèle de gestes | Politique LeRobot (ACT) entraînée par imitation | **2 modèles** (voir ci-dessous) ; 1er essai : triangle seul |
-| Orchestrateur | Demandes P-Robo, choix de la cible, verrou, nouvelles tentatives | À faire |
-| Communication | TCP avec P-Robo | Proposition + serveur de référence (`docs/protocole_tcp.md`, `echange_tcp.py`) ; à faire valider par P-Robo |
+| Orchestrateur | Demandes P-Robo, choix de la cible, nouvelles tentatives | En deux étapes (`cellule.py`, modèle lancé à la main) ; automatique à faire |
+| Communication | TCP avec le Stäubli, sécurité de la zone | Fait (`echange_tcp.py`, `docs/protocole_tcp.md`) ; à valider avec P-Robo et à essayer sur le robot |
+| Coordonnées | Position et orientation dans la zone d'échange | Fait (`mesure_echange.py`) ; précision réelle à mesurer |
+
+## Décision (2026-11-25) : dépôt à la demande, protocole de P-Robo
+
+- Les pièces conformes sont déposées **à la demande**, une seule à la fois : pas d'emplacements à
+  gérer ni de pièces voisines dans la zone.
+- On suit les trames du cahier des charges de P-Robo (déjà codées sur leur robot) au lieu de notre
+  proposition JSON. Le droit d'entrée dans la zone est donné par l'envoi des coordonnées : la
+  sécurité tient donc au moment où l'on répond (`docs/protocole_tcp.md` §5).
+- Premier essai **en deux étapes** (modèle lancé à la main) pour tester séparément le modèle et
+  la communication.
+- Orientation `RZ` : phase du moment complexe d'ordre n de la surface (n = 3, 5, 6), moyennée sur
+  plusieurs images ; erreur < 2,5° sur images synthétiques, à mesurer sur les vraies pièces.
 
 ## Décision (2026-11-16) : deux modèles, choisis selon la destination
 
@@ -67,7 +82,7 @@ données : une seule pièce visible.
 ## Points ouverts
 
 - ~~Correspondance entre caméras~~ : résolue par homographie table ↔ caméra (coins de la nappe
-  cliqués), voir `docs/conformite.md`. Mêmes coordonnées en mm pour P-Robo.
+  cliqués), voir `docs/conformite.md`. Repère de P-Robo : `docs/protocole_tcp.md` §4.
 - **Câbles rouges du bras** : peuvent être pris pour une pièce quand le bras passe dans une boîte.
 - **Défauts** : choix des mesures (taille en mm, couleur Lab, forme au contour) plutôt que YOLO :
   un défaut de taille subtil ne se voit pas sur l'apparence, il se mesure ; et les références
