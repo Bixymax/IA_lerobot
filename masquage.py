@@ -68,7 +68,7 @@ SEUIL_CHROMA = 15  # écart de couleur (Lab) mini avec la table pour qu'un pixel
                    # un ensemble changé n'est effacé que s'il contient de tels pixels (= une pièce)
 
 # Détecteur PROVISOIRE (avant YOLO) : forme déduite de la teinte H (OpenCV : 0-179, rouge = 0 ou 179).
-# A VÉRIFIER sur vos pièces avec `python detection.py ...`, qui affiche la teinte mesurée (h=..).
+# A VÉRIFIER sur vos pièces avec `flux_masque.py --diagnostic --ancien-detecteur` (teinte h=..).
 TEINTES = [("triangle", 0, 10), ("triangle", 165, 179),    # rouge
            ("rond", 11, 22),                                # orange
            ("hexagone", 23, 38),                            # jaune
@@ -494,7 +494,7 @@ class Masqueur:
 
     def detecter(self, camera, frame, aire_min=80, aire_max=20000):
         """Détecteur PROVISOIRE par couleur, une caméra à la fois : la forme est devinée d'après
-        la teinte (TEINTES) et toutes les pièces sont dites conformes. Utilisé par detection.py et
+        la teinte (TEINTES) et toutes les pièces sont dites conformes. Utilisé
         par flux_masque.py quand il n'y a pas de caméra `top` ; sinon le flux passe par
         selection.py (forme au contour, taille et couleur jugées sur `top`).
         Renvoie des dicts compatibles avec choisir_cible()."""

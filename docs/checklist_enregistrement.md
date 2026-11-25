@@ -29,8 +29,8 @@ Nappe : **rouge = alimentation** (pièces de départ), **vert = déchet** (poube
 - [ ] `./setup_local.sh` → corriger les ✗ ; `nano local.env` ; `source local.env`
 - [ ] `lerobot-find-port` (débrancher/rebrancher un bras) → `PORT_LEADER`, `PORT_FOLLOWER`
 - [ ] `sudo chmod 666 $PORT_LEADER $PORT_FOLLOWER`
-- [ ] Téléopération sans caméra (`manuel.md`) : le follower suit le leader. Sinon recalibrer
-      (`manuel.md`) : à la question, **taper `c`** (Entrée seul réutilise l'ancienne calibration)
+- [ ] Téléopération sans caméra (`docs/manuel.md`) : le follower suit le leader. Sinon recalibrer
+      (`docs/manuel.md`) : à la question, **taper `c`** (Entrée seul réutilise l'ancienne calibration)
 
 ## C. Caméras
 - [ ] `python masquage.py voir --cams side=$SIDE top=$TOP angle45=$ANGLE45` : **vérifier à l'écran

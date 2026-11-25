@@ -8,7 +8,6 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import detection  # noqa: E402
 import masquage  # noqa: E402
 
 H, W = 480, 640
@@ -102,28 +101,6 @@ def test_detection_par_couleur():
     fond, frame = _scene()
     formes = sorted(d["forme"] for d in masquage.Masqueur({"top": fond}).detecter("top", frame))
     assert formes == ["etoile", "hexagone", "rond", "triangle"]
-
-
-def test_montrer_forme_un_seul_triangle():
-    fond, frame = _scene()
-    m = masquage.Masqueur({"top": fond})
-    image, pieces, cible = detection.montrer_forme(m, "top", frame, "triangle")
-    assert cible is not None and cible["forme"] == "triangle"
-    x1, y1, x2, y2 = cible["boite"]
-    assert np.array_equal(image[y1:y2, x1:x2], frame[y1:y2, x1:x2])     # triangle intact
-    vide = _table(1, gain=1.03)
-    for box in [(275, 125, 325, 175), (455, 125, 505, 175), (275, 325, 325, 375)]:
-        assert _ecart(image, vide, box) == 0.0                            # les autres effacées
-
-
-def test_forme_absente_tout_efface():
-    fond = _table(0)
-    frame = _table(1, gain=1.03)
-    cv2.circle(frame, (300, 150), 30, ORANGE, -1)            # seulement un rond
-    m = masquage.Masqueur({"top": fond})
-    image, _, cible = detection.montrer_forme(m, "top", frame, "triangle")
-    assert cible is None                                      # -> "indisponible" pour P-Robo
-    assert _ecart(image, _table(1, gain=1.03), (275, 125, 325, 175)) == 0.0
 
 
 def test_piece_pale_sur_table_teintee():

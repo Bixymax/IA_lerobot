@@ -25,13 +25,10 @@ remplaçant par une photo de la table vide (le *fond*). Détails : `docs/archite
 | `mesure_echange.py` | Position (mm) et orientation RZ de la pièce posée dans la zone d'échange |
 | `cellule.py` | Essai en deux étapes : demande, flux masqué, modèle lancé à la main, mesure, réponse (`docs/essai_cellule.md`) |
 | `scripts/rollout_echange.sh`, `scripts/faux_staubli.py` | Lancer le modèle « échange » ; jouer le rôle du robot |
-| `detection.py` | Démo : garder une forme visible, effacer les autres (ancien détecteur par couleur) |
-| `capture_dataset.py` | Constitution d'un jeu d'images étiquetées depuis la caméra du dessus |
-| `record_dataset.py`, `lerobot_recorder/` | Menu interactif d'enregistrement LeRobot (voir plus bas) |
-| `scripts/record_triangle.sh` | Commande `lerobot-record` du premier jeu de données |
-| `manuel.md` | Aide-mémoire des commandes LeRobot (calibration, téléopération, enregistrement, test d'un modèle) |
+| `docs/manuel.md` | Aide-mémoire des commandes LeRobot (calibration, téléopération, enregistrement, test d'un modèle) |
 | `tests/` | Tests sur images synthétiques et sockets locales (pas besoin de matériel) |
-| `docs/` | `architecture.md`, `conformite.md`, `flux_masque.md`, `protocole_tcp.md`, `essai_cellule.md`, `checklist_enregistrement.md` |
+| `docs/` | `architecture.md`, `conformite.md`, `flux_masque.md`, `protocole_tcp.md`, `essai_cellule.md`, `checklist_enregistrement.md`, `prochaine_session.md` (journal des séances) ; captures dans `images/`, anciennes notes dans `archive/` |
+| `consignes/` | Cahiers des charges des enseignants et de la communication TCP/IP de P-Robo |
 
 ## Installation (une seule fois par PC)
 
@@ -59,7 +56,7 @@ source local.env
 Les commandes de toute la doc utilisent ces variables. Ensuite, dans l'ordre :
 
 1. **Bras** : `lerobot-find-port` pour savoir quel port est le leader et lequel est le follower
-   (débrancher/rebrancher un bras). Les calibrations LeRobot (`manuel.md`) restent valables si les
+   (débrancher/rebrancher un bras). Les calibrations LeRobot (`docs/manuel.md`) restent valables si les
    bras portent les mêmes `id`.
 2. **Caméras** : identifier à l'écran laquelle est `side`, `top`, `angle45` :
    `python masquage.py voir --cams side=$SIDE top=$TOP angle45=$ANGLE45`
@@ -95,23 +92,10 @@ Trois Logitech C310, nommées comme dans LeRobot : `side` (côté, rase la table
 sont rangés **par nom** : seuls les index changent. Les caméras virtuelles du flux (10, 11, 12) n'ont pas
 de MJPG : pas de `fourcc` dans les commandes LeRobot qui les lisent.
 
-## Enregistrement (menu interactif)
+## Enregistrement
 
-```bash
-python record_dataset.py --find-ports     # PORT_FOLLOWER / PORT_LEADER
-python record_dataset.py --find-cameras
-python record_dataset.py                  # menu : tester bras, prévisualiser, enregistrer
-python record_dataset.py --task "..." --episodes 30 --dry-run
-```
-
-Réglages par défaut dans `lerobot_recorder/config.py` (variables `PORT_FOLLOWER`, `PORT_LEADER`,
-`FOLLOWER_ID`, `LEADER_ID`) ; l'enregistrement avec masquage se lance avec les commandes de
-`docs/flux_masque.md`. Sources : <https://huggingface.co/docs/lerobot/en/il_robots>.
-
-```
-lerobot_recorder/  config.py (réglages) · commands.py (commandes lerobot-*, testables avec --dry-run)
-                   system.py (vérifs, exécution) · actions.py / session.py (menu) · cli.py (arguments)
-```
+Avec le flux masqué, par les commandes `lerobot-record` de `docs/flux_masque.md`.
+Source : <https://huggingface.co/docs/lerobot/en/il_robots>.
 
 ## Communication avec P-Robo
 

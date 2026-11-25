@@ -1,7 +1,7 @@
 # Protocole TCP/IP commun P-IA ↔ P-Robo (zone d'échange)
 
 **Statut : v2, à valider par les deux pôles.** Reprend le cahier des charges de P-Robo
-(`Cahier des charges — Communication TCP IP Robot ↔ Vision.pdf`, 27/09/2026) pour les messages, et
+(`consignes/4_PRobo_CommunicationTCPIP.pdf`, 27/09/2026) pour les messages, et
 précise ce qu'il laisse ouvert (§4, §5, §7). Remplace la proposition JSON précédente.
 Implémentation côté P-IA : `echange_tcp.py` (dialogue), `mesure_echange.py` (coordonnées),
 `cellule.py` (enchaînement).
