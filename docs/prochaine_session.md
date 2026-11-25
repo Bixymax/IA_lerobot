@@ -1,5 +1,71 @@
 # Prochaine session au local robot : état et reprise
 
+## Séance du 2026-11-23 (résumé, le plus récent d'abord)
+
+**Fait**
+- Caméras `angle45` déplacée en cours de séance : fond et calibration d'`angle45` refaits. Références ×4
+  réapprises dans la lumière du jour. Index détectés au départ : `SIDE=6 TOP=0 ANGLE45=2` (à revérifier).
+- Datasets « échange » complets à 100 épisodes, **poussés sur HF** : `Bixymax/so101_masque_echange_etoile_100`
+  (2 × 50), `…_hexagone_100` (46 + 54, `angle45` a bougé entre les deux parties), `…_rond_20261117_113551`,
+  `…_triangle_20261117_092054` (clignotements possibles à 9 h non relus).
+- Fusion des 4 : `Bixymax/so101_masque_echange_toutes_formes` (400 épisodes, 154 546 images), local. **Push
+  lancé ensuite, résultat non vu** : vérifier qu'il est bien sur le Hub (sinon `LeRobotDataset(...).push_to_hub()`
+  avec conda `lerobot` seul, sans `.venv`).
+- Entraînement ACT lancé sur les GPU de l'école avec ce dataset (`lerobot-train`, `policy.repo_id=
+  Bixymax/act_so101_masque_echange_toutes_formes`).
+
+**À faire / nettoyage**
+- Hub : les deux morceaux d'hexagone (`…_20261123_150633` 46 ép., `…_hexagone_2_20261123_153703` 54 ép.) sont
+  toujours en ligne, supprimés en local seulement. À supprimer sur le Hub si on veut.
+- Local à trier : `…rond_112107` (25), `…rond_110859` (6), morceaux étoile `…etoile_v2_*` (deux), `…poubelle_…_old`.
+- **Jeton HF collé dans le chat** : à révoquer et recréer.
+- **Dataset poubelle à continuer** (47 épisodes existent, poussés le 16). Prévu : `--forme defaut`, repo_id
+  `Bixymax/so101_masque_poubelle_3`, tâche « Prendre la pièce défectueuse visible et la mettre dans la zone
+  poubelle ». **Avant : screening** (`conformite.py verifier`, pièces étalon, `c`, remplir `vraie_forme` /
+  `vraie_etat`, `scripts/bilan_formes.py`) : aucune bonne pièce classée défectueuse, la lumière a changé.
+- Pièges de la séance : un `(.venv)` actif masque `lerobot` ; commande `lerobot-record` collée sur plusieurs
+  lignes = « Missing required field `dataset` » ; une seule ligne, sans `\`.
+
+## Séance du 2026-11-17 (résumé, le plus récent d'abord)
+
+**Datasets « échange » enregistrés, NON poussés sur HF** (`push_to_hub=false`), dans
+`~/.cache/huggingface/lerobot/Bixymax/` :
+- `so101_masque_echange_triangle_20261117_092054` : 100 épisodes (enregistré à 9 h 20, avant les
+  incidents ; des autres pièces clignotaient parfois : à relire avant de pousser).
+- `so101_masque_echange_rond_20261117_113551` : 100 épisodes (série propre, après le nouveau fond de 11 h 02
+  et la calibration de 11 h 05). Autres dossiers ronds : `_112107` (25 ép.) et `_110859` (6 ép.) : à relire,
+  à supprimer ou fusionner.
+- `so101_masque_echange_etoile_20261117_123112` : 27 épisodes (objectif 50, arrêté faute de temps).
+  `…_122727` (1 épisode) : à supprimer. La caméra `side` a lâché pendant la série : **vérifier les derniers
+  épisodes de `side`** (image figée ou noire) avant de pousser.
+- Reste : dataset « poubelle » déjà poussé le 16 ; fusion des 2 poubelle, fusion des morceaux ronds/étoile,
+  push HF, entraînement.
+
+**Incidents du jour (à éviter la prochaine fois)**
+- **Caméra `side` : faux contact USB** (port `usb-0:3`). Son index est passé de 4 à 5 puis à 4 (12 h 28) et le
+  flux affichait « side : N lectures ratées ». Remplacer le câble, le fixer au scotch, vérifier
+  `v4l2-ctl --list-devices` avant chaque série. Les épisodes enregistrés pendant une coupure sont inutilisables.
+- **`angle45` déplacée par accident** : fond + calibration à refaire (c'était la calibration). Scotcher les pieds
+  des caméras ET leurs câbles.
+- **Alimentation du leader coupée** : `Missing motor IDs 1..6` = bras non alimenté. Puis plus aucun `ttyACM`
+  = les deux câbles USB débranchés.
+- Commande `lerobot-record` incomplète (sans `--dataset.repo_id`) : « FileExistsError … /lerobot ».
+- Lancer les commandes depuis `~/projetIArobot`, conda `lerobot` seul (ni `.venv`, ni `(base)` empilé).
+- Un `rerun` oublié depuis 8 h 58 consommait 75 % d'un cœur : le fermer.
+
+**Références d'étoile nettoyées (fonds/references.json)** : 8 mesures aberrantes retirées (diamètre 15-22 mm,
+solidité/régularité basses, surtout vers x = -36..-50, y = 100..150 : reflet / zone plus claire). Sauvegardes :
+`fonds/references_avant_nettoyage_etoile_1253.json` et `~/sauvegardes_pia/fonds_2026-11-17`. **À refaire au
+prochain labo : `rm fonds/references.json` puis `apprendre` ×4 (étoile comprise), dans la lumière du jour.**
+Contrôler que le coin x ≈ -45, y ≈ 100-150 n'a pas de reflet. Tolérance de taille de l'étoile serrée (σ 0,4 mm,
+`taille_k=3`) : à vérifier avec `verifier` (faux défauts ?).
+
+**Reprise** : checklist A à E (fond, calibration, références) ; terminer les étoiles (50 -> ~23 de plus), relire
+les datasets, fusionner, pousser, entraîner. Index de la fin de séance : `SIDE=4 TOP=2 ANGLE45=0`,
+`PORT_FOLLOWER=/dev/ttyACM0`, `PORT_LEADER=/dev/ttyACM1` (à revérifier).
+
+(Ce qui suit date du 2026-11-16 et avant.)
+
 ## Séance du 2026-11-16 (résumé, le plus récent d'abord)
 
 **Enregistré et poussé sur Hugging Face (publics)** : modèle « poubelle » = pièce défectueuse -> zone verte.
